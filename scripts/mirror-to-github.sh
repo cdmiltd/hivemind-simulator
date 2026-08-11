@@ -73,8 +73,8 @@ retry() {
     done
 }
 
-# 1. 推送 tag
-retry git push "$GITHUB_REMOTE" "refs/tags/$TAG"
+# 1. 推送 tag（force，镜像场景下 codeup 是主仓库，允许覆盖 GitHub 旧 tag 以支持重新发布）
+retry git push --force "$GITHUB_REMOTE" "refs/tags/$TAG"
 
 # 2. 将 tag 对应的 commit 推送到 GitHub master 分支（force，因为是镜像同步）
 retry git push --force "$GITHUB_REMOTE" "$COMMIT:refs/heads/master"

@@ -38,12 +38,13 @@ jobs:
         run: |
           JAR=$(ls target/*.jar | grep -v original | head -1)
           echo "JAR: $JAR"
-          # 直接使用完整模块列表，不依赖 jdeps 静态分析
-          # jdeps --print-module-deps 无法检测 Spring Boot 运行时反射加载的模块
-          # （java.beans.PropertyEditorSupport、java.util.logging.Logger 等），已多次导致 JRE 启动失败
-          MODULES="java.base,java.desktop,java.logging,java.management,java.naming,java.net.http,java.scripting,java.sql,java.transaction.xa,java.xml,jdk.crypto.cryptoki,jdk.crypto.ec,jdk.unsupported"
-          echo "Modules: $MODULES"
-          jlink --no-header-files --no-man-pages --compress=2 --strip-debug --add-modules "$MODULES" --output target/runtime
+          # 使用 ALL-DEFAULT 包含所有标准模块，避免遗漏运行时反射加载的模块
+          # 已多次因手动指定模块列表遗漏导致 JRE 启动失败：
+          #   - java.beans.PropertyEditorSupport（java.desktop）
+          #   - java.util.logging.Logger（java.logging）
+          #   - org.ietf.jgss.GSSException（java.security.jgss）
+          # 可靠性优先于体积优化
+          jlink --no-header-files --no-man-pages --compress=2 --strip-debug --add-modules ALL-DEFAULT --output target/runtime
 
       - name: Verify runtime
         shell: bash
