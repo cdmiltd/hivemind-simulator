@@ -38,13 +38,17 @@ jobs:
         run: |
           JAR=$(ls target/*.jar | grep -v original | head -1)
           echo "JAR: $JAR"
-          # 使用 ALL-DEFAULT 包含所有标准模块，避免遗漏运行时反射加载的模块
+          # 动态获取所有 java.* 模块 + 关键 jdk.* 模块，避免遗漏运行时反射加载的模块
           # 已多次因手动指定模块列表遗漏导致 JRE 启动失败：
           #   - java.beans.PropertyEditorSupport（java.desktop）
           #   - java.util.logging.Logger（java.logging）
           #   - org.ietf.jgss.GSSException（java.security.jgss）
-          # 可靠性优先于体积优化
-          jlink --no-header-files --no-man-pages --compress=2 --strip-debug --add-modules ALL-DEFAULT --output target/runtime
+          # jlink 不支持 ALL-DEFAULT 常量，需动态获取模块名
+          JAVA_MODULES=$(java --list-modules | grep "^java\." | cut -d'@' -f1 | paste -sd,)
+          JDK_MODULES="jdk.crypto.cryptoki,jdk.crypto.ec,jdk.unsupported,jdk.zipfs"
+          MODULES="${JAVA_MODULES},${JDK_MODULES}"
+          echo "Modules: $MODULES"
+          jlink --no-header-files --no-man-pages --compress=2 --strip-debug --add-modules "$MODULES" --output target/runtime
 
       - name: Verify runtime
         shell: bash
