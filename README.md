@@ -26,6 +26,7 @@
 - **DRC 远程指挥**：支持 DRC 指令通道
 - **飞行控制**：一键起飞/返航/降落模拟
 - **属性设置**：响应平台属性设置指令
+- **位置模拟**：高德地图选点（自动获取海拔）或手动输入坐标，地址搜索定位
 - **诊断系统**：协议覆盖率统计、规格校验、MQTT 消息日志
 - **监控器页面**：独立 MQTT 客户端，实时监听平台消息用于调试
 - **桌面端打包**：Tauri 打包为 Windows 安装包，内置 JRE
@@ -134,14 +135,15 @@ server:
 
 查看当前任务进度和媒体文件列表（由 hivemind 下发任务触发）。
 
-### 机场位置
+### 位置模拟
 
-- 手动输入机场经纬度和高度（作为无人机起飞点与返航点）
-- 位置保存后持久化，应用重启后自动恢复
+- **地图模式**：输入高德地图 JS API Key 后启用，支持地图选点、拖拽 Marker、地址搜索定位
+- **手动模式**：直接输入经纬度和高度
+- 地图选点自动获取海拔高度（Open-Meteo Elevation API）
+- 地图模式下选点/拖拽自动保存，手动模式下需点击保存按钮
+- 机场位置作为起飞点与返航点，保存后重启依然有效
 - 实时显示无人机位置（纬度/经度/高度/状态），飞行时按步骤更新
 - 飞行器未激活时位置显示为 `-`
-
-> 第一版不集成地图，用户需手动复制经纬度填入。后续版本可考虑集成地图组件。
 
 ### 直播推流配置
 
@@ -202,7 +204,6 @@ hivemind-simulator/
 |---|---|
 | [设计文档](docs/superpowers/specs/2026-08-08-dji-dock-simulator-design.md) | 架构、DJI 时序图、协议覆盖、数据流、错误码体系、update_topo 核实结论 |
 | [TDD 规格测试文档](docs/TDD-SPEC.md) | 容易搞错的规格陷阱、测试用例、TDD 开发模式 |
-| [AGENTS.md](AGENTS.md) | AI 编程约定（修改前置流程、文档对齐、汇报要求） |
 
 ### DJI Cloud API 参考
 
@@ -279,13 +280,13 @@ git push origin master
 
 ### 阿里云 codeup CI 配置
 
-CI 配置文件：[`.codeup/flow-mirror.yml`](.codeup/flow-mirror.yml)
+CI 配置文件 `.codeup/flow-mirror.yml` 仅存在于本地和 Codeup 流水线配置中（已加入 `.gitignore`，不上传仓库）。
 
 **一次性配置步骤**：
 1. 在 [codeup Web 界面](https://codeup.aliyun.com) → 流水线 → 新建流水线 → YAML 模式
-2. 关联 `.codeup/flow-mirror.yml` 文件
+2. 关联 `.codeup/flow-mirror.yml` 文件（或直接在 Web 界面粘贴内容）
 3. 在流水线「代码源」中创建 codeup 服务连接，将 ID 填入 YAML 的 `serviceConnection`
-4. 在流水线「设置 → 环境变量」中添加 `GITHUB_TOKEN`（[GitHub Personal Access Token](https://github.com/settings/tokens)，需 `repo` 权限）
+4. 在流水线「变量与缓存 → 自定义变量」中添加 `GITHUB_TOKEN`（[GitHub Personal Access Token](https://github.com/settings/tokens)，需 `repo` 权限）
 5. 保存后，每次推送 `v*` 格式的 tag 将自动触发镜像推送
 
 ### GitHub Issue 拉取与分析
@@ -308,7 +309,7 @@ gh issue list --repo cdmiltd/hivemind-simulator --state open --json number,title
 **AI 分析流程**：
 1. 在 Trae 中执行 `gh issue list` 拉取 Issue 列表
 2. 将 Issue 内容提供给 AI 分析（Bug 报告 / 功能请求 / 文档问题）
-3. AI 根据 [TDD-SPEC.md](docs/TDD-SPEC.md) 规格和 [AGENTS.md](AGENTS.md) 约定生成修复方案
+3. AI 根据 [TDD-SPEC.md](docs/TDD-SPEC.md) 规格生成修复方案
 4. 人工审核方案后在阿里云仓库实施修复
 5. 修复随下一个 release 版本发布到 GitHub，自动关闭对应 Issue
 
