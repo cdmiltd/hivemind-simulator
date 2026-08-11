@@ -38,15 +38,10 @@ jobs:
         run: |
           JAR=$(ls target/*.jar | grep -v original | head -1)
           echo "JAR: $JAR"
-          MODULES=$(jdeps --print-module-deps --ignore-missing-deps --multi-release 21 "$JAR" 2>/dev/null || echo "java.base,java.desktop,java.logging,java.management,java.naming,java.net.http,java.scripting,java.sql,java.transaction.xa,java.xml,jdk.crypto.cryptoki,jdk.crypto.ec,jdk.unsupported")
-          # jdeps 静态分析无法检测运行时反射加载的模块，强制补充 Spring Boot 需要的模块
-          # java.beans.PropertyEditorSupport（java.desktop）由 BindConverter 反射加载
-          for m in java.desktop java.scripting; do
-            case ",$MODULES," in
-              *",$m,"*) ;;
-              *) MODULES="$MODULES,$m" ;;
-            esac
-          done
+          # 直接使用完整模块列表，不依赖 jdeps 静态分析
+          # jdeps --print-module-deps 无法检测 Spring Boot 运行时反射加载的模块
+          # （java.beans.PropertyEditorSupport、java.util.logging.Logger 等），已多次导致 JRE 启动失败
+          MODULES="java.base,java.desktop,java.logging,java.management,java.naming,java.net.http,java.scripting,java.sql,java.transaction.xa,java.xml,jdk.crypto.cryptoki,jdk.crypto.ec,jdk.unsupported"
           echo "Modules: $MODULES"
           jlink --no-header-files --no-man-pages --compress=2 --strip-debug --add-modules "$MODULES" --output target/runtime
 
