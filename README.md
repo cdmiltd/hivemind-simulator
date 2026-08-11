@@ -78,7 +78,7 @@ graph TB
 
     subgraph 云端
         EMQX[EMQX Broker]
-        HIVE[hivemind 平台<br/>DJI Cloud API 后端]
+        HIVE[第三方巡飞平台<br/>DJI Cloud API 后端]
     end
 
     WEB <-->|REST API| BACK
@@ -99,20 +99,20 @@ graph TB
 sequenceDiagram
     participant 模拟器
     participant EMQX
-    participant hivemind
+    participant 第三方巡飞平台
 
     模拟器->>EMQX: 建立 MQTT 连接
-    模拟器->>hivemind: config（上报设备配置）
-    hivemind-->>模拟器: config_reply（app_license）
-    模拟器->>hivemind: airport_bind_status（查询绑定状态）
-    hivemind-->>模拟器: bind_status_reply
-    模拟器->>hivemind: airport_organization_get（获取组织树）
-    hivemind-->>模拟器: organization_get_reply
-    模拟器->>hivemind: airport_organization_bind（绑定设备到组织）
-    hivemind-->>模拟器: organization_bind_reply
-    Note over 模拟器,hivemind: 注册完成
-    模拟器->>hivemind: update_topo（设备上线）
-    Note over 模拟器,hivemind: 设备上线，开始 OSD/State 上报
+    模拟器->>第三方巡飞平台: config（上报设备配置）
+    第三方巡飞平台-->>模拟器: config_reply（app_license）
+    模拟器->>第三方巡飞平台: airport_bind_status（查询绑定状态）
+    第三方巡飞平台-->>模拟器: bind_status_reply
+    模拟器->>第三方巡飞平台: airport_organization_get（获取组织树）
+    第三方巡飞平台-->>模拟器: organization_get_reply
+    模拟器->>第三方巡飞平台: airport_organization_bind（绑定设备到组织）
+    第三方巡飞平台-->>模拟器: organization_bind_reply
+    Note over 模拟器,第三方巡飞平台: 注册完成
+    模拟器->>第三方巡飞平台: update_topo（设备上线）
+    Note over 模拟器,第三方巡飞平台: 设备上线，开始 OSD/State 上报
 ```
 
 ## 技术栈
