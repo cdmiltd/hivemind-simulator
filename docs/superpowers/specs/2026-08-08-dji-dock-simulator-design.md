@@ -23,7 +23,7 @@ hivemind 是无人机自主作业平台，已通过 `adapter-drone` 模块按 DJ
 
 ## 2. 架构总览
 
-自包含 Spring Boot 应用，位于 `Simulator/` 目录。作为 MQTT 客户端连接 hivemind 的 EMQX broker，伪装成 DJI 机场+飞行器设备组（通过 `DeviceType` 枚举支持 Dock1/2/3 + M30/M30T/M3D/M3TD/M4D/M4TD，默认 Dock3+M4TD）。内嵌静态 Web 控制台（Vue 3 CDN，单 HTML），浏览器即可控制模拟机场行为。
+自包含 Spring Boot 应用，位于 `hivemind-simulator/` 目录。作为 MQTT 客户端连接 hivemind 的 EMQX broker，伪装成 DJI 机场+飞行器设备组（通过 `DeviceType` 枚举支持 Dock1/2/3 + M30/M30T/M3D/M3TD/M4D/M4TD，默认 Dock3+M4TD）。内嵌静态 Web 控制台（Vue 3 CDN，单 HTML），浏览器即可控制模拟机场行为。
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -53,18 +53,19 @@ hivemind 是无人机自主作业平台，已通过 `adapter-drone` 模块按 DJ
 | `MonitorMqttClient` | 监控器独立 MQTT 客户端 |
 | `MonitorService` | 监控器消息处理 |
 | `DeviceState` | Dock + Drone 的模拟状态模型（在线/离线、电量、温湿度、位置、舱盖/推杆/充电等） |
-| `DeviceSimulator` | 状态维护 + 0.5Hz OSD 定时上报（dock osd + drone osd） |
+| `DeviceSimulator` | 状态维护 + 0.5Hz OSD 定时上报（dock osd 始终推送，drone osd 仅 `droneActivated=true` 时推送） |
 | `DockOnlineService` | 上云注册 + 上线流程：config → airport_bind_status → airport_organization_get → airport_organization_bind → update_topo |
-| `DeviceType` | 设备类型枚举：封装 (domain, type, sub_type) 三元组，提供机场/飞行器型号管理、model_key 解析、机场-飞行器兼容性校验 |
+| `DeviceType` | 设备类型枚举：封装 (domain, type, sub_type) 三元组，提供机场/飞行器型号管理、model_key 解析、机场-飞行器兼容性校验、内置默认 SN（`defaultSn()`） |
 | `PayloadType` | 负载类型枚举：封装 (type, subtype, gimbalindex)，覆盖飞行器主相机、通用云台负载、FPV 相机、机场相机 |
 | `OsdStrategy` | OSD 序列化策略接口：`convertKey()` 转换字段命名风格、`version()` 标识协议版本；Dock3 用 snake_case，Dock1/Dock2 用 camelCase |
 | `ServiceCommandHandler` | 收到云端 services 命令，路由到对应处理器并回 services_reply |
 | `PropertySetHandler` | property/set 应答 |
-| `WaylineTaskSimulator` | 航线任务模拟：flighttask_prepare 回复 → flighttask_execute 异步推进 flighttask_progress → 完成后触发媒体上传 |
+| `WaylineTaskSimulator` | 航线任务模拟：flighttask_prepare 回复 → flighttask_execute 异步推进 flighttask_progress → 完成后触发媒体上传。无人机位置随飞行步骤更新（起飞=机场位置、航线执行中=机场+偏移、降落=机场位置），任务完成后重置为机场位置 |
 | `LiveStreamSimulator` | 直播模拟（[live.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/live.html)）：live_start_push/stop_push/set_quality 同步应答 + 推流状态管理，live_camera_change（仅 Dock2+3）解析 camera_position，live_lens_change 解析 video_type，三 Dock 差异校验 |
 | `FfmpegWhipPusher` | FFmpeg WHIP/RTMP 推流能力检测与执行：启动时检测本机 ffmpeg 是否支持 whiptp/rtmp muxer，提供 `getCapability()` 供前端展示限制清单 |
 | `FfmpegInstaller` | FFmpeg 一键安装（Windows winget）：执行 `winget install ffmpeg`，安装后自动查找 ffmpeg.exe 路径，支持 SSE 进度推送 |
-| `MediaUploadSimulator` | 媒体上传：storage_config_get 请求 → file_upload_callback 事件上报 |
+| `MediaUploadSimulator` | 媒体上传：storage_config_get 请求 → STS 凭证解析 → S3 文件上传 → file_upload_callback 事件上报 |
+| `MediaUploader` | S3 兼容文件上传：使用 STS 凭证上传文件到对象存储（支持 ali/aws/minio/obs，从 endpoint 提取签名 region） |
 | `HmsSimulator` | HMS 告警上报（基于 hms.json 错误码映射） |
 | `RemoteDebugSimulator` | 远程调试模拟（[cmd.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/cmd.html)）：同步 Cmd 指令（debug_mode/light/battery/alarm 等仅回 result=0）+ 异步 Job 指令（cover/drone/charge/putter/reboot/format/esim/rtk 进度事件 in_progress→ok + percent + 状态同步），区分 Dock1/Dock2/Dock3 指令集差异 |
 | `FlightCommandSimulator` | 指令飞行模拟（[drc.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html)）：fly_to_point/takeoff_to_point 指令应答 + 专用进度事件（fly_to_point_progress/takeoff_to_point_progress），flight_authority_grab/payload_authority_grab 同步应答 |
@@ -74,8 +75,8 @@ hivemind 是无人机自主作业平台，已通过 `adapter-drone` 模块按 DJ
 | `PageController` | 返回内嵌 index.html / monitor.html |
 | `SimulatorProperties` | 配置绑定（device/location/log/live） |
 | `MqttProperties` | MQTT 配置绑定（顶层共享，模拟器与监控器共用连接参数） |
-| `RuntimeConfig` | 运行时可变配置（前端 REST API 覆盖） |
-| `LiveConfigStore` | Live 推流配置持久化（`~/.hivemind-simulator/live-config.json`，启动加载/变更保存） |
+| `RuntimeConfig` | 运行时可变配置（前端 REST API 覆盖）：MQTT 参数、组织ID/绑定码/设备型号/SN/直播推流/媒体上传/机场位置 |
+| `LiveConfigStore` | Live 推流 + 媒体上传 + 机场位置配置持久化（`~/.hivemind-simulator/live-config.json`，启动加载/变更保存） |
 
 ## 4. DJI Cloud API 时序图
 
@@ -251,7 +252,7 @@ hivemind 是无人机自主作业平台，已通过 `adapter-drone` 模块按 DJ
 1. Web 控制台点"注册到第三方平台" → `SimulatorController.connect()`
 2. `DockOnlineService` 发 `config` 请求获取 app_id/app_key/app_license/ntp
    - 超时重试 3 次（间隔 3 秒），全失败停止注册
-   - 收到回复后比对 app_license 与本地配置，不一致停止注册返回 -6
+   - 收到回复后比对 app_license 与本地配置，不一致停止注册返回 -6。本地未配置 app_license（留空）时跳过校验，不模拟 License 认证
 3. 发 `airport_bind_status` 查询绑定状态
 4. 发 `airport_organization_get` 查询组织信息（result=210229 表示绑定码错误，停止注册）
 5. 发 `airport_organization_bind` 绑定到组织（result=210229 表示绑定码错误，停止注册）
@@ -319,21 +320,28 @@ hivemind 是无人机自主作业平台，已通过 `adapter-drone` 模块按 DJ
 1. **获取上传临时凭证**（Requests）
    ├─ Topic: thing/product/{gateway_sn}/requests          Method: storage_config_get（data.module=0）
    └─ Topic: thing/product/{gateway_sn}/requests_reply     Method: storage_config_get
-       解析 output.object_key_prefix，用于构造 file_upload_callback 的 object_key
+       解析 output 完整 STS 凭证：bucket/credentials.access_key_id/access_key_secret/security_token/endpoint/provider/region/object_key_prefix
 
 2. **媒体文件上传优先级上报**（Event，need_reply=1）
    ├─ Topic: thing/product/{gateway_sn}/events             Method: highest_priority_upload_flighttask_media（data.flight_id）
    └─ Topic: thing/product/{gateway_sn}/events_reply       Method: 同上（tid 匹配，result=0）
        等待云端 events_reply 确认收到
 
-3. **媒体文件上传结果上报**（Event，need_reply=1，逐个上报）
+3. **上传文件到对象存储**（S3 兼容协议，非 MQTT）
+   ├─ 使用 STS 凭证创建 S3 客户端（按 endpoint 指向 OSS/OBS/S3/MinIO）
+   ├─ 从 endpoint 提取签名 region（OSS: oss-cn-hangzhou→cn-hangzhou；OBS: obs.cn-north-1→cn-north-1）
+   ├─ 从 media-dir 目录读取模拟照片/视频文件
+   ├─ 上传到 bucket，object_key = object_key_prefix + "/" + flight_id + "/" + fileName
+   └─ 降级策略：media-dir 未配置或 STS 凭证获取失败时跳过上传，仅发 file_upload_callback（元数据上报）
+
+4. **媒体文件上传结果上报**（Event，need_reply=1，逐个上报）
    ├─ Topic: thing/product/{gateway_sn}/events             Method: file_upload_callback
-   │   data.file 含 object_key（拼接 object_key_prefix）/path/name/ext/metadata
+   │   data.file 含 object_key（指向已上传的真实文件或虚构值）/path/name/ext/metadata
    │   data.flight_task 含 uploaded_file_count（递增）/expected_file_count（总数）
    └─ Topic: thing/product/{gateway_sn}/events_reply       Method: 同上（tid 匹配，result=0）
        每个文件等待 events_reply 后才继续下一个；超时不阻塞（warn 日志后继续）
 
-4. **调整上传文件为最高优先级**（Service，云端主动下发）
+5. **调整上传文件为最高优先级**（Service，云端主动下发）
    ├─ Topic: thing/product/{gateway_sn}/services           Method: upload_flighttask_media_prioritize（data.flight_id）
    └─ Topic: thing/product/{gateway_sn}/services_reply     Method: 同上（result=0）
        记录优先级 flight_id，后续媒体上传以此 flight_id 为优先
@@ -369,14 +377,8 @@ mqtt:
   monitor-client-id-prefix: monitor-
 
 simulator:
-  device:
-    dock-sn: 7UUXN1Q00A008W
-    drone-sn: 1081F8HGD25110010059
-    dock-type: DOCK3            # DOCK1/DOCK2/DOCK3
-    drone-type: M4TD            # M30/M30T/M3D/M3TD/M4D/M4TD
-    organization-id: MJDQELED
-    device-binding-code: IxEYnFLHPFyIicrn
-    app-license: ""             # 桌面端用户在注册时填写覆盖
+  # 设备型号 / SN / 组织ID / 绑定码 / DJI License 均由用户在注册时通过前端表单输入
+  # 默认设备型号：DOCK3 + M4TD（见 RuntimeConfig）
   location:
     latitude: 30.670815
     longitude: 104.071523
@@ -392,7 +394,7 @@ server:
   port: 9090
 ```
 
-配置链路：`application.yml`（启动默认值）→ `SimulatorProperties`/`MqttProperties`（绑定）→ `RuntimeConfig`（运行时可改）→ 前端 REST API 覆盖。Live 推流配置（`ffmpegPath`/`videoDir`/`realPushEnabled`）通过 `LiveConfigStore` 持久化到 `~/.hivemind-simulator/live-config.json`，启动时自动加载覆盖默认值，变更时自动保存。
+配置链路：`application.yml`（启动默认值）→ `SimulatorProperties`/`MqttProperties`（绑定）→ `RuntimeConfig`（运行时可改）→ 前端 REST API 覆盖。Live 推流配置（`ffmpegPath`/`videoDir`/`realPushEnabled`）、媒体上传目录（`mediaDir`）和机场位置（`locationLatitude`/`locationLongitude`/`locationHeight`）通过 `LiveConfigStore` 持久化到 `~/.hivemind-simulator/live-config.json`，启动时自动加载覆盖默认值，变更时自动保存。机场位置作为无人机起飞点与返航点，由用户在前端手动输入（第一版不集成地图），影响 `return_home_info` 事件和无人机位置展示。
 
 ## 8. 错误码体系
 
@@ -440,7 +442,7 @@ server:
 
 ### 8.6 实现方式
 
-`DiagnosticCode` 枚举（`ltd.cdmi.simulator.diagnostic` 包）：
+`DiagnosticCode` 枚举（`ltd.cdmi.hivemind.simulator.diagnostic` 包）：
 - `code`：字符串码（如 "P-1"）
 - `description`：中文描述
 - `category`：责任方分类（"platform"/"simulator"/"monitor"）
@@ -466,8 +468,51 @@ server:
 Vue 3 + Element Plus CDN，无构建步骤。面板：
 - **设备控制**：注册到第三方平台、上下线按钮、SN/型号展示、连接状态
 - **状态参数**：电量、温湿度、风速、位置等可手动调整，影响 OSD 上报
+- **位置模拟**：支持地图模式（高德地图选点 + Open-Meteo 自动获取海拔）和手动模式（直接输入经纬度+高度），两种模式互斥切换
+  - 地图模式：地址搜索仅定位地图视图（不修改机场坐标），用户通过选点/拖拽 Marker 精确设置机场位置，选点后自动保存（无需点保存按钮）
+  - 手动模式：直接输入经纬度+高度，点击保存按钮持久化
+  - 高德 Key 配置：通过「配置」按钮弹出弹窗，含申请步骤指引 + Key/安全密钥输入，保存后激活地图模式
+  - 无人机位置：展示实时经纬度/高度/状态，`activated=false` 时位置显示 `-`，不在舱未激活时状态显示"未知"
 - **任务模拟**：展示当前任务进度、手动触发任务完成/失败、媒体文件列表
 - **消息日志**：实时滚动展示收发的 MQTT 报文（topic + method + 摘要）
+
+#### 10.1.1 位置模拟业务流
+
+```mermaid
+flowchart TD
+    A[用户打开位置模拟面板] --> B{mapMode?}
+    B -->|map| C[地址搜索 → 仅定位地图视图]
+    B -->|manual| D[手动输入经纬度+高度]
+    C --> E[选点/拖拽 Marker]
+    E --> F[setAirportLocation]
+    F --> G[fetchElevation Open-Meteo API]
+    G --> H[saveLocation PUT /api/location]
+    D --> I[点击保存按钮]
+    I --> H
+    B -->|首次使用| J[点击配置按钮]
+    J --> K[弹窗输入高德Key]
+    K --> L[initAmap 加载JS API]
+    L --> M[createMap 创建地图+Marker]
+```
+
+#### 10.1.2 地址搜索与自动保存技术流
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant UI as el-autocomplete
+    participant AMap as AMap.AutoComplete
+    participant Map as AMap.Map
+    participant API as Backend API
+    U->>UI: 输入地址关键字
+    UI->>AMap: fetchAddressSuggestions(query)
+    AMap-->>UI: 返回 tips 列表
+    U->>UI: 选中建议项
+    UI->>Map: setZoomAndCenter(仅移动视图)
+    U->>Map: 点击选点/拖拽Marker
+    Map->>API: setAirportLocation → fetchElevation → saveLocation
+    API-->>Map: 自动保存完成
+```
 
 ### 10.2 监控器页面（monitor.html）
 独立 MQTT 客户端监听平台消息，用于调试观察。
@@ -475,15 +520,15 @@ Vue 3 + Element Plus CDN，无构建步骤。面板：
 ## 11. 项目结构
 
 ```
-Simulator/
+hivemind-simulator/
 ├── pom.xml
-├── src/main/java/ltd/cdmi/simulator/
+├── src/main/java/ltd/cdmi/hivemind/simulator/
 │   ├── SimulatorApplication.java              # 启动入口
 │   ├── config/
-│   │   ├── SimulatorProperties.java           # 配置绑定（device/location/log）
+│   │   ├── SimulatorProperties.java           # 配置绑定（location/log/live/media）
 │   │   ├── MqttProperties.java                # MQTT 配置绑定（顶层共享）
-│   │   ├── RuntimeConfig.java                 # 运行时可变配置（前端覆盖）
-│   │   └── LiveConfigStore.java               # Live 推流配置持久化（JSON 文件）
+│   │   ├── RuntimeConfig.java                 # 运行时可变配置（前端覆盖：MQTT/设备型号/直播/媒体/机场位置）
+│   │   └── LiveConfigStore.java               # Live 推流+媒体+机场位置配置持久化（JSON 文件）
 │   ├── mqtt/
 │   │   ├── MqttClientManager.java             # 模拟器 MQTT 连接/订阅/发布/消息日志
 │   │   ├── TopicConstants.java                # DJI topic 模板常量
@@ -491,7 +536,7 @@ Simulator/
 │   │   ├── MonitorMqttClient.java             # 监控器 MQTT 客户端
 │   │   └── MonitorService.java                # 监控器消息处理
 │   ├── device/
-│   │   ├── DeviceType.java                   # 设备类型枚举（Dock1/2/3 + M30/M3D/M4D 系列）
+│   │   ├── DeviceType.java                    # 设备类型枚举（Dock1/2/3 + M30/M3D/M4D 系列）
 │   │   ├── PayloadType.java                   # 负载类型枚举（主相机/云台/FPV/机场相机）
 │   │   ├── DeviceState.java                   # Dock+Drone 状态模型
 │   │   ├── DeviceSimulator.java               # 0.5Hz OSD 上报
@@ -522,7 +567,9 @@ Simulator/
 │   │   ├── LiveStreamSimulator.java           # 直播应答 + FFmpeg 推流
 │   │   ├── FfmpegWhipPusher.java              # FFmpeg WHIP/RTMP 推流能力检测与执行
 │   │   ├── FfmpegInstaller.java               # FFmpeg 一键安装（winget）
-│   │   ├── MediaUploadSimulator.java          # 媒体上传模拟
+│   │   ├── MediaUploadSimulator.java          # 媒体上传模拟（STS 凭证 + S3 上传 + 回调）
+│   │   ├── MediaUploader.java                 # S3 兼容文件上传（ali/aws/minio/obs）
+│   │   ├── StorageConfig.java                 # 对象存储 STS 凭证（解析自 storage_config_get 回复）
 │   │   ├── HmsSimulator.java                  # HMS 告警上报
 │   │   ├── DrcCommandHandler.java             # DRC 远程指挥调度
 │   │   ├── FlightCommandSimulator.java        # 飞行指令模拟
@@ -534,10 +581,26 @@ Simulator/
 ├── src/main/resources/
 │   ├── application.yml
 │   ├── hms.json                               # HMS 错误码映射
+│   ├── dji-method-catalog.json                # DJI 方法目录（协议覆盖率统计基准）
 │   └── static/
 │       ├── index.html                         # 模拟器控制台
-│       └── monitor.html                       # 监控器页面
-└── src/test/java/                             # 单元测试
+│       ├── monitor.html                       # 监控器页面
+│       ├── favicon.svg                        # 站点图标
+│       └── vendor/                            # 第三方依赖（CDN 本地化）
+│           ├── vue/                           # Vue 3
+│           └── element-plus/                  # Element Plus
+├── src/test/java/ltd/cdmi/hivemind/simulator/ # 单元测试
+│   ├── DeviceSimulatorTest.java               # OSD 上报与设备状态
+│   ├── WaylineTaskSimulatorTest.java          # 航线任务
+│   ├── LiveStreamSimulatorTest.java           # 直播推流
+│   ├── MediaUploadSimulatorTest.java          # 媒体上传
+│   └── RemoteDebugSimulatorTest.java          # 远程调试
+└── src-tauri/                                 # Tauri 桌面端打包（端口固定 19090）
+    ├── tauri.conf.json                        # Tauri 配置
+    ├── Cargo.toml                             # Rust 依赖
+    ├── src/main.rs                            # Tauri 主进程
+    ├── icons/                                 # 桌面端图标（多平台）
+    └── gen/                                   # Tauri 生成的 schema
 ```
 
 ## 12. 技术选型

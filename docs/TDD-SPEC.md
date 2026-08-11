@@ -101,7 +101,9 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 
 #### TC-REG-006：app_license 比对
 - **给定**：config 回复包含 `app_license` 字段
-- **当**：本地配置的 app_license 与回复中的不一致（或本地为空）
+- **当**：本地未配置 app_license（留空）
+- **那么**：跳过 License 校验，继续后续注册步骤
+- **当**：本地配置的 app_license 与回复中的不一致
 - **那么**：停止注册，返回错误码 -6
 - **当**：一致
 - **那么**：继续后续注册步骤
@@ -110,7 +112,7 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 #### TC-REG-007：License 首次注册锁定
 - **给定**：localStorage 中无 `locked_app_license`（首次注册或已清除）
 - **当**：用户点击「注册到第三方平台」
-- **那么**：注册界面显示 App License 输入行，用户可输入
+- **那么**：注册界面显示 DJI License 输入行，用户可输入
 - **当**：用户输入 license 并提交
 - **那么**：将输入的 app_license 存入 `localStorage['locked_app_license']`（无论后续注册成功与否）
 - **那么**：继续发送 config 请求，与云端返回的 app_license 比对（TC-REG-006）
@@ -119,11 +121,11 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 #### TC-REG-008：License 锁定后注册界面隐藏输入行
 - **给定**：localStorage 中已有 `locked_app_license`（非首次注册）
 - **当**：用户打开注册弹窗
-- **那么**：注册界面隐藏 App License 输入行，显示「已锁定」标签
+- **那么**：注册界面隐藏 DJI License 输入行，显示「已锁定」标签
 - **那么**：用户无需再次输入 license
 - **当**：用户提交注册
 - **那么**：前端直接使用 `localStorage['locked_app_license']` 作为 app_license 发送 config 请求
-- **核实依据**：App License 是第三方平台通过 config 回复下发给模拟器的，用户在模拟器侧再次输入不起作用；模拟真实机场 license 首次注册后不可更改的行为
+- **核实依据**：DJI License 是第三方平台通过 config 回复下发给模拟器的，用户在模拟器侧再次输入不起作用；模拟真实机场 license 首次注册后不可更改的行为
 
 #### TC-REG-009：自动重连跳过注册流程，直接上线
 - **给定**：设备已注册（`localStorage.registered=true`），开机自动重连
@@ -171,6 +173,15 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **当**：注册失败（MQTT 连接失败或注册流程失败）
 - **那么**：前端不调用 `saveConnConfig()`，localStorage 保持上一次成功注册时的配置
 - **错误后果**：注册失败也保存配置，错误密码/地址覆盖原配置
+
+#### TC-REG-015：SN 由设备型号决定（不可手动配置）
+- **给定**：application.yml 配置了 `dock-type: DOCK3` 和 `drone-type: M4TD`
+- **当**：模拟器启动
+- **那么**：RuntimeConfig 从 `DeviceType.defaultSn()` 获取 SN（DOCK3 → `7UUXN1Q00A008W`，M4TD → `1081F8HGD25110010059`）
+- **那么**：所有 MQTT topic 使用该 SN（`thing/product/{sn}/...`）
+- **那么**：前端设备信息面板显示该 SN
+- **那么**：yml 不支持 `dock-sn` / `drone-sn` 配置（已移除，SN 完全由设备型号决定）
+- **SN 生成时机**：启动时根据 `dock-type` / `drone-type` 生成，运行时切换型号不自动更新 SN（与 MQTT 监听器在构造函数中绑定 SN 的设计一致）
 
 ### 2.3 上线流程
 
@@ -266,7 +277,7 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 #### TC-CFG-003：app-license 占位符
 - **给定**：application.yml 中 `app-license: ""`
 - **当**：桌面端用户首次使用
-- **那么**：用户在注册弹窗填写 App License，通过 /api/connect 覆盖 RuntimeConfig
+- **那么**：用户在注册弹窗填写 DJI License，通过 /api/connect 覆盖 RuntimeConfig
 - **补充**：填写后保存到 localStorage，下次自动填充
 
 #### TC-CFG-004：配置链路覆盖顺序
@@ -1652,6 +1663,49 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **那么**：协议完全一致，无 Dock 差异（与直播的 live_camera_change 不同）
 - **核实依据**：三 Dock 的 media.html/file.html 协议字段完全相同
 
+#### TC-MEDIA-010：storage_config_get 解析完整 STS 凭证
+- **给定**：storage_config_get 回复包含 `output.bucket`/`output.credentials`/`output.endpoint`/`output.provider`/`output.region`/`output.object_key_prefix`
+- **当**：模拟器解析回复
+- **那么**：提取 `access_key_id`/`access_key_secret`/`security_token`/`endpoint`/`bucket`/`region`/`object_key_prefix`/`provider`
+- **核实依据**：[Dock3 media.html 获取上传临时凭证](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/media.html) requests_reply output 结构
+
+#### TC-MEDIA-011：真实文件上传到对象存储
+- **给定**：`media-dir` 配置了有效目录，目录中有图片/视频文件
+- **当**：模拟器执行媒体上传
+- **那么**：使用 STS 凭证通过 S3 兼容协议上传文件到对象存储（bucket + object_key）
+- **那么**：上传成功后发 `file_upload_callback`（object_key 指向已上传的真实文件）
+- **那么**：平台可通过 object_key 从对象存储下载到真实文件
+- **核实依据**：[DJI 媒体管理交互时序图](https://developer.dji.com/doc/cloud-api-tutorial/cn/feature-set/pilot-feature-set/pilot-media-management.html#interaction-sequence-diagram) 机场使用临时凭证上传文件到对象存储
+
+#### TC-MEDIA-012：media-dir 未配置时降级为仅元数据上报
+- **给定**：`media-dir` 未配置或目录为空
+- **当**：模拟器执行媒体上传
+- **那么**：跳过文件上传，仅发 `file_upload_callback`（元数据上报，object_key 为虚构值）
+- **那么**：日志记录"未配置 media-dir，跳过文件上传"
+- **错误后果**：平台无法下载/预览文件，但协议层完整
+
+#### TC-MEDIA-013：STS 凭证获取失败时降级
+- **给定**：`storage_config_get` 超时或返回 `result!=0`
+- **当**：模拟器执行媒体上传
+- **那么**：跳过文件上传，仅发 `file_upload_callback`（使用虚构 object_key）
+- **核实依据**：降级策略确保协议层不中断
+
+#### TC-MEDIA-014：支持多云厂商（ali/aws/minio/obs）
+- **给定**：`storage_config_get` 回复 `provider=ali` 或 `aws` 或 `minio` 或 `obs`
+- **当**：模拟器上传文件
+- **那么**：使用 S3 兼容协议，按 `endpoint` 创建 S3 客户端
+- **那么**：`minio` 启用 path-style 访问；`ali`/`aws`/`obs` 使用默认 virtual-hosted style
+- **核实依据**：[Dock3 media.html] provider 字段枚举值 `{"ali":"阿里云","aws":"亚马逊云","minio":"minio"}`；OBS 为 S3 兼容服务扩展支持
+
+#### TC-MEDIA-015：从 endpoint 提取签名 region
+- **给定**：`storage_config_get` 回复 `endpoint=https://oss-cn-hangzhou.aliyuncs.com`、`region=hz`
+- **当**：模拟器创建 S3 客户端
+- **那么**：从 endpoint 提取完整区域名 `cn-hangzhou` 作为 SigV4 签名 region（而非短格式 `hz`）
+- **那么**：华为云 OBS endpoint `https://obs.cn-north-1.myhuaweicloud.com` 提取 `cn-north-1`
+- **那么**：AWS S3 endpoint `https://s3.us-east-1.amazonaws.com` 提取 `us-east-1`
+- **那么**：endpoint 无法识别时回退到 region 字段；均为空时默认 `us-east-1`
+- **错误后果**：使用短格式 region（如 `hz`）可能导致 S3 签名校验失败，OSS 返回 403
+
 ### 2.20 航线管理（wayline.html）
 
 > 设计背景：DJI Cloud API「航线管理」走 services（下行）+ events（上行），三 Dock 协议**存在差异**（与媒体管理不同）。
@@ -1684,12 +1738,16 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **那么**：回 services_reply `result=0`，恢复进度推进
 - **核实依据**：[Dock3 wayline.html 航线暂停/恢复](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) Service 结构
 
-#### TC-WAYLINE-004：flighttask_undo/flighttask_stop 回复 + canceled 状态上报
-- **给定**：航线任务执行中
+#### TC-WAYLINE-004：flighttask_undo/flighttask_stop 回复 + canceled 状态上报（地面态）
+- **给定**：航线任务执行中，飞行器在地面态（`mode_code ∈ {0, 1, 2}`，尚未起飞或起飞准备阶段）
 - **当**：云端下发 `flighttask_stop`（Dock2/3）或 `flighttask_undo`
 - **那么**：回 services_reply `result=0`
 - **那么**：停止进度推进，上报 `flighttask_progress`（status=canceled, result=0）
-- **核实依据**：[Dock3 wayline.html 任务终止](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) Service 结构
+- **那么**：完整恢复 dock 状态：
+    - 无人机位置重置为机场位置（`droneLatitude=runtimeConfig.locationLatitude`、`droneLongitude=runtimeConfig.locationLongitude`、`droneHeight=0.0`）
+    - `droneModeCode=0`（待机）、`droneInDock=true`、`droneChargeState=1`（充电中）
+    - `coverOpen=false`、`putterExpanded=false`、`dockModeCode=0`（待机）
+- **核实依据**：[Dock3 wayline.html 任务终止](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) Service 结构；mode_code 取值见 [M30 设备属性 mode_code 枚举](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/aircraft/m30-properties.html)
 
 #### TC-WAYLINE-005：return_home/return_home_cancel/return_specific_home 回复
 - **给定**：云端下发 `return_home`
@@ -1827,9 +1885,146 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **当**：云端下发 `flighttask_stop`（仅 Dock2/3）
 - **那么**：终止执行中的任务，上报 `flighttask_progress`（status=canceled）
 - **与 flight_setup_abort 的区别**：`flight_setup_abort` 在 Home 点设置阶段（RTK 未收敛）调用；`flighttask_undo` 在 `flighttask_execute` 前调用；`flighttask_stop` 在 `flighttask_execute` 后调用
+- **补充**：三个方法均受 `mode_code` 约束——飞行器起飞后（`mode_code ∈ {3-12}`）调用任一取消方法均返回 326109 拒绝（见 TC-WAYLINE-022）
 - **核实依据**：[Dock1 wayline.html 取消准备中的任务说明](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html) flight_setup_abort 描述
 
-### 2.21 覆盖率报告
+#### TC-WAYLINE-022：飞行中取消任务返回 326109 拒绝 ⚠️
+- **给定**：飞行器在飞行中（`mode_code ∈ {3, 4, 5, 6, 7, 8, 9, 10, 11, 12}`，已起飞/航线执行/返航/降落中）
+- **当**：云端下发 `flighttask_stop` / `flighttask_undo` / `flight_setup_abort`
+- **那么**：回 services_reply `result=326109`（因飞行器已经起飞，不支持取消，可通过返航按钮取消）
+- **那么**：不重置无人机位置、不修改 `droneModeCode`、不上报 `flighttask_progress`（status=canceled）
+- **那么**：任务进度推进保持原状（若在执行中则继续执行）
+- **错误后果**：飞行中允许取消会让无人机"瞬移"回机场，违背 DJI 协议且不符合物理规律，误导平台开发者认为取消后位置立即归位
+- **核实依据**：[Dock1 wayline.html 取消准备中的任务](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html) 返回码 326109 原文：「因飞行器已经起飞，不支持取消，可通过返航按钮取消」
+
+#### TC-WAYLINE-023：异常态取消任务返回 326108 拒绝
+- **给定**：飞行器在异常态（`mode_code=13` 升级中 / `mode_code=14` 未连接）
+- **当**：云端下发 `flighttask_stop` / `flighttask_undo` / `flight_setup_abort`
+- **那么**：回 services_reply `result=326108`（当前状态不支持）
+- **那么**：不重置无人机位置、不修改 `droneModeCode`、不上报 `flighttask_progress`（status=canceled）
+- **核实依据**：[Dock1 wayline.html 取消准备中的任务](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html) 返回码 326108 原文：「当前状态不支持」
+
+### 2.21 机场位置与无人机位置
+
+> 设计背景：模拟器需对接第三方平台的航线任务，机场位置（起飞点/返航点）应可调整。
+> 支持两种位置输入模式：地图模式（高德地图选点 + 自动获取海拔）和手动模式（直接输入经纬度+高度）。
+> 机场位置作为 return_home_info 事件的返航点和无人机起飞的初始位置。
+
+#### TC-LOC-001：机场位置配置链路
+- **给定**：`application.yml` 中 `simulator.location` 配置默认值（latitude/longitude/height）
+- **当**：应用启动
+- **那么**：`RuntimeConfig` 从 yml 加载默认值，`LiveConfigStore` 持久化文件存在时覆盖默认值
+- **配置链路**：yml → SimulatorProperties → RuntimeConfig ← LiveConfigStore（持久化覆盖）
+
+#### TC-LOC-002：机场位置 REST API
+- **给定**：模拟器运行中
+- **当**：前端调用 `GET /api/location`
+- **那么**：返回 `{latitude, longitude, height}` 当前机场位置
+- **当**：前端调用 `PUT /api/location` 传入 `{latitude, longitude, height}`
+- **那么**：更新 `RuntimeConfig` 并持久化到 `~/.hivemind-simulator/live-config.json`，返回 `{success:true, latitude, longitude, height}`
+
+#### TC-LOC-003：机场位置参数校验
+- **给定**：前端调用 `PUT /api/location`
+- **当**：纬度/经度/高度任一非数字
+- **那么**：返回 `success=false, message="纬度/经度/高度必须为数字"`，HTTP 仍为 200
+- **当**：纬度不在 -90~90 范围
+- **那么**：返回 `success=false, message="纬度范围应为 -90 ~ 90"`
+- **当**：经度不在 -180~180 范围
+- **那么**：返回 `success=false, message="经度范围应为 -180 ~ 180"`
+- **遵循**：业务逻辑返回明确拒绝原因而非抛异常（AGENTS.md §2）
+
+#### TC-LOC-004：return_home_info 使用机场位置
+- **给定**：任务完成触发 `return_home_info` 事件
+- **当**：`publishReturnHomeInfo()` 构造 `planned_path_points`
+- **那么**：`latitude/longitude/height` 取自 `runtimeConfig.getLocation*()`（运行时可修改）
+- **而非**：取自 `props.location()`（yml 静态配置）
+
+#### TC-LOC-005：无人机位置随飞行步骤更新
+- **给定**：`flighttask_execute` 触发任务执行
+- **当**：进度推进到 `current_step=24`（起飞）
+- **那么**：`droneLatitude=机场纬度, droneLongitude=机场经度, droneHeight=0`
+- **当**：进度推进到 `current_step=25`（航线执行中）
+- **那么**：`droneLatitude=机场纬度+0.001, droneLongitude=机场经度+0.001, droneHeight=50`（相对机场偏移约 100 米）
+- **当**：进度推进到 `current_step=27`（降落机场）
+- **那么**：`droneLatitude=机场纬度, droneLongitude=机场经度, droneHeight=20`
+- **当**：进度推进到 `current_step=28`（关盖）
+- **那么**：`droneLatitude=机场纬度, droneLongitude=机场经度, droneHeight=0`
+- **height 字段语义**：相对起飞点高度（与用户期望一致）
+
+#### TC-LOC-006：任务完成后无人机位置重置
+- **给定**：任务执行完成（`completeTask()` 调用）
+- **当**：无人机归舱
+- **那么**：`droneLatitude=机场纬度, droneLongitude=机场经度, droneHeight=0`（避免前端显示残留的飞行中偏移位置）
+
+#### TC-LOC-007：无人机位置 REST API
+- **给定**：模拟器运行中
+- **当**：前端调用 `GET /api/drone/position`
+- **那么**：返回 `{latitude, longitude, height, mode_code, in_dock, activated}`
+- **前端展示规则**：`activated=false` 时纬度/经度/高度显示 `-`（遵循 AGENTS.md §2 不适用值用 `-`）
+
+#### TC-LOC-008：无人机位置状态标签映射
+- **给定**：前端展示无人机状态
+- **当**：`activated=false` 且 `in_dock=true`（在舱休眠）
+- **那么**：状态标签显示"休眠"
+- **当**：`activated=false` 且 `in_dock=false`（不在舱，状态未知）
+- **那么**：状态标签显示"未知"
+- **当**：`activated=true` 且 `mode_code=0`
+- **那么**：状态标签显示"待机"
+- **mode_code 映射**：0=待机, 1=起飞准备, 2=起飞准备完毕, 4=自动起飞, 5=航线飞行, 9=自动返航, 10=自动降落, 13=返航降落
+
+#### TC-LOC-009：机场位置持久化向后兼容
+- **给定**：旧版本配置文件 `live-config.json` 不包含 location 字段
+- **当**：应用启动加载配置
+- **那么**：Jackson 自动填充 0.0，`RuntimeConfig` 检测到三字段同时为 0.0 时视为未配置，回退到 yml 默认值
+- **不阻断**：启动流程，仅告警日志
+
+#### TC-LOC-010：地图模式 - 地址搜索仅定位地图视图
+- **给定**：地图模式已激活（高德 Key 有效）
+- **当**：用户在地址搜索框输入关键字并从下拉建议中选择一个地址
+- **那么**：地图中心移动到选中地址的坐标（`setZoomAndCenter`）
+- **而非**：直接修改机场坐标（`locationEdit` 不变）、不移动 Marker、不获取海拔、不触发保存
+- **设计理由**：机场实际部署位置往往不在目标地址中心，用户需通过选点或拖拽 Marker 精确设置
+
+#### TC-LOC-011：地图模式 - 选点/拖拽 Marker 自动保存
+- **给定**：地图模式已激活
+- **当**：用户点击「选点」按钮后在地图上点击某位置
+- **那么**：更新 `locationEdit` 坐标 → 移动 Marker → 获取海拔（Open-Meteo API）→ 自动调用 `PUT /api/location` 保存
+- **当**：用户拖拽 Marker 到新位置并释放
+- **那么**：同上自动保存流程
+- **不需要**：点击「保存」按钮（保存按钮在地图模式下隐藏）
+
+#### TC-LOC-012：地图模式 - 保存按钮仅手动模式显示
+- **给定**：位置模拟面板
+- **当**：`mapMode === 'manual'`
+- **那么**：显示「保存」按钮，用户编辑经纬度/高度后需手动点击保存
+- **当**：`mapMode === 'map'`
+- **那么**：隐藏「保存」按钮（选点/拖拽已自动保存）
+
+#### TC-LOC-013：高德地图配置弹窗
+- **给定**：位置模拟面板 Title 栏
+- **当**：用户点击「配置」按钮
+- **那么**：弹出配置弹窗，包含高德 JS Key 申请步骤说明 + Key/安全密钥输入框
+- **当**：用户输入 Key 并点击「保存」
+- **那么**：Key 持久化到 `localStorage`，加载高德 JS API 初始化地图，关闭弹窗
+- **当**：用户点击「清除」（仅已配置时显示）
+- **那么**：清除 `localStorage` 中的 Key，回退到手动模式，重置所有地图实例
+
+#### TC-LOC-014：地图模式 - 自动获取海拔高度
+- **给定**：地图模式下用户选点或拖拽 Marker 设置新位置
+- **当**：`setAirportLocation` 被调用
+- **那么**：调用 Open-Meteo Elevation API（`https://api.open-meteo.com/v1/elevation`）获取该坐标的海拔
+- **那么**：将海拔值写入 `locationEdit.height`（四舍五入到 0.1m）
+- **当**：API 返回无数据或请求失败
+- **那么**：提示用户手动输入高度，不阻断保存流程
+
+#### TC-LOC-015：无人机不在舱且未激活时 OSD 不上报
+- **给定**：`droneInDock=false` 且 `droneActivated=false`
+- **当**：`DeviceSimulator.publishOsd()` 执行
+- **那么**：Dock OSD 正常上报
+- **那么**：Drone OSD **不上报**（`isDroneActivated()` 为 false，跳过推送）
+- **前端展示**：纬度/经度/高度显示 `-`，状态显示"未知"
+
+### 2.22 覆盖率报告
 
 > 设计背景：覆盖率报告用于发现"第三方平台对 DJI Cloud API 接口的访问覆盖情况"，重点是列出**未被覆盖的清单**。
 > 覆盖率测试往往跨多次连接（切换平台/重连），需保留累积数据。

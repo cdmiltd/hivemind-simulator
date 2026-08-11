@@ -468,10 +468,10 @@
             </div>
         </div>
 
-        <!-- 右侧：状态参数 + 直播状态 + 任务模拟 -->
+        <!-- 右侧：状态模拟 + 直播模拟 + 任务模拟 -->
         <div class="right-panel">
-            <!-- 状态参数 -->
-            <el-card class="right-card" header="状态参数">
+            <!-- 状态模拟 -->
+            <el-card class="right-card" header="状态模拟">
                 <el-form label-width="72px" size="small">
                     <el-form-item label="电量(%)">
                         <el-slider v-model="editState.batteryPercent" :min="0" :max="100" @change="saveState"></el-slider>
@@ -519,11 +519,11 @@
                 </div>
             </el-card>
 
-            <!-- 直播状态 -->
+            <!-- 直播模拟 -->
             <el-card class="right-card">
                 <template #header>
                     <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span>直播状态</span>
+                        <span>直播模拟</span>
                         <el-button size="small" text @click="refreshLiveCapability">重新检测</el-button>
                     </div>
                 </template>
@@ -585,15 +585,84 @@
                     </div>
                 </div>
             </el-card>
+
+            <!-- 位置模拟 -->
+            <el-card class="right-card">
+                <template #header>
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <span>位置模拟</span>
+                            <el-radio-group v-model="mapMode" size="small" @change="onMapModeChange">
+                                <el-radio-button value="map" :disabled="!amapKeyApplied">地图</el-radio-button>
+                                <el-radio-button value="manual">手动</el-radio-button>
+                            </el-radio-group>
+                            <el-button size="small" text @click="showAmapConfigDialog = true">配置</el-button>
+                        </div>
+                        <el-button v-if="mapMode === 'manual'" size="small" type="primary" @click="saveLocation">保存</el-button>
+                    </div>
+                </template>
+                <!-- 地图模式 -->
+                <div v-if="mapMode === 'map'">
+                    <!-- 地址搜索 + 选点按钮 -->
+                    <div style="display: flex; gap: 4px; margin-bottom: 4px;">
+                        <el-autocomplete
+                            v-model="addressSearch"
+                            :fetch-suggestions="fetchAddressSuggestions"
+                            placeholder="输入地址搜索"
+                            size="small"
+                            clearable
+                            value-key="value"
+                            style="flex: 1;"
+                            @select="onAddressSelect"
+                        ></el-autocomplete>
+                        <el-button size="small" :type="selectingAirport ? 'warning' : 'default'" @click="startSelectAirport">
+                            {{ selectingAirport ? '点击地图' : '选点' }}
+                        </el-button>
+                        <el-button v-if="selectingAirport" size="small" @click="cancelSelectAirport">取消</el-button>
+                    </div>
+                    <!-- 地图容器 -->
+                    <div id="mapContainer" style="width: 100%; height: 240px; border: 1px solid #e4e7ed; border-radius: 4px;"></div>
+                </div>
+                <!-- 手动模式 -->
+                <div v-if="mapMode === 'manual'">
+                    <!-- 未配置 Key 时提示 -->
+                    <div v-if="!amapKeyApplied" style="margin-bottom: 8px; padding: 8px; background: #f5f7fa; border-radius: 4px; font-size: 12px; color: #909399;">
+                        点击「配置」按钮申请并填写高德地图 Key，可切换到地图模式
+                    </div>
+                    <!-- 经纬度+高度输入 -->
+                    <el-form label-width="60px" size="small">
+                        <el-form-item label="纬度">
+                            <el-input-number v-model="locationEdit.latitude" :precision="6" :step="0.000001" :controls="false" style="width: 100%;"></el-input-number>
+                        </el-form-item>
+                        <el-form-item label="经度">
+                            <el-input-number v-model="locationEdit.longitude" :precision="6" :step="0.000001" :controls="false" style="width: 100%;"></el-input-number>
+                        </el-form-item>
+                        <el-form-item label="高度(m)">
+                            <el-input-number v-model="locationEdit.height" :precision="1" :step="0.1" :controls="false" style="width: 100%;"></el-input-number>
+                        </el-form-item>
+                    </el-form>
+                </div>
+                <div style="font-size: 12px; color: #909399; margin-top: 4px;">
+                    机场位置作为起飞点与返航点，保存后重启依然有效。
+                </div>
+
+                <!-- 无人机实时位置 -->
+                <div style="margin-top: 12px; padding-top: 10px; border-top: 1px dashed #e4e7ed;">
+                    <div style="font-size: 13px; color: #303133; margin-bottom: 6px;">无人机位置</div>
+                    <el-descriptions :column="1" border size="small">
+                        <el-descriptions-item label="纬度">{{ dronePosition.activated ? dronePosition.latitude.toFixed(6) : '-' }}</el-descriptions-item>
+                        <el-descriptions-item label="经度">{{ dronePosition.activated ? dronePosition.longitude.toFixed(6) : '-' }}</el-descriptions-item>
+                        <el-descriptions-item label="高度(m)">{{ dronePosition.activated ? dronePosition.height.toFixed(1) : '-' }}</el-descriptions-item>
+                        <el-descriptions-item label="状态">{{ droneStatusLabel }}</el-descriptions-item>
+                    </el-descriptions>
+                </div>
+            </el-card>
         </div>
     </div>
 
     <!-- 注册到第三方平台 弹窗 -->
     <el-dialog v-model="showRegisterDialog" title="注册到第三方平台" width="460px">
         <el-form label-width="90px" size="small">
-            <el-form-item label="组织ID">
-                <el-input v-model="connConfig.organization_id" placeholder="如 default-org"></el-input>
-            </el-form-item>
             <el-form-item label="机场类型">
                 <el-select v-model="connConfig.dock_type" @change="onDockTypeChange" placeholder="选择机场类型" style="width: 100%;">
                     <el-option v-for="o in dockTypeOptions" :key="o.value" :label="o.label" :value="o.value"></el-option>
@@ -604,14 +673,18 @@
                     <el-option v-for="o in droneTypeOptions" :key="o.value" :label="o.label" :value="o.value"></el-option>
                 </el-select>
             </el-form-item>
+            <el-form-item v-if="!licenseLocked" label="DJI License">
+                <el-input v-model="connConfig.app_license" placeholder="留空则不模拟 License 认证"></el-input>
+                <div style="font-size: 12px; color: #909399; line-height: 1.4; margin-top: 4px;">不填写则后端跳过 License 校验，适用于调试阶段</div>
+            </el-form-item>
+            <el-form-item v-else label="DJI License">
+                <el-tag type="success" size="small">已锁定（首次注册后无需再次输入）</el-tag>
+            </el-form-item>
+            <el-form-item label="组织ID">
+                <el-input v-model="connConfig.organization_id" placeholder="如 default-org"></el-input>
+            </el-form-item>
             <el-form-item label="绑定码">
                 <el-input v-model="connConfig.device_binding_code" placeholder="设备绑定码"></el-input>
-            </el-form-item>
-            <el-form-item v-if="!licenseLocked" label="App License">
-                <el-input v-model="connConfig.app_license" placeholder="DJI App License"></el-input>
-            </el-form-item>
-            <el-form-item v-else label="App License">
-                <el-tag type="success" size="small">已锁定（首次注册后无需再次输入）</el-tag>
             </el-form-item>
             <el-form-item label="MQTT地址">
                 <el-input v-model="connConfig.mqtt_address" placeholder="如 127.0.0.1:1883"></el-input>
@@ -722,6 +795,14 @@
             </el-form-item>
         </el-form>
 
+        <!-- 媒体上传配置 -->
+        <el-divider content-position="left" style="margin: 16px 0 8px;">媒体上传</el-divider>
+        <el-form label-width="110px" label-position="right">
+            <el-form-item label="媒体文件目录">
+                <el-input v-model="liveConfigEdit.mediaDir" placeholder="如 D:/media（留空则仅上报元数据，不上传真实文件）"></el-input>
+            </el-form-item>
+        </el-form>
+
         <!-- 安装进度面板 -->
         <div v-if="installingFfmpeg" class="install-progress-panel"
              style="margin-top: 8px; border: 1px solid #dcdfe6; border-radius: 4px; padding: 8px 12px; max-height: 180px; overflow-y: auto; background: #fafafa; font-size: 12px; font-family: Consolas, 'Courier New', monospace;">
@@ -778,6 +859,15 @@
 └── 165-0-7-zoom.mp4     ← 相机165-0-7 变焦镜头</pre>
                 </div>
             </el-collapse-item>
+            <el-collapse-item title="媒体文件如何准备？" name="media">
+                <div style="font-size: 13px; color: #606266; line-height: 1.8;">
+                    <p style="margin: 4px 0;"><b>媒体上传流程：</b>航线任务完成后，模拟器自动执行 storage_config_get 获取 STS 凭证 → 从本目录读取文件上传到对象存储 → 发 file_upload_callback 通知平台。</p>
+                    <p style="margin: 4px 0;"><b>支持的文件格式：</b>jpg / jpeg / png / dng / tif / tiff / mp4 / mov / avi</p>
+                    <p style="margin: 4px 0;"><b>最简方式：</b>在目录中放几张照片（如 photo1.jpg、photo2.jpg），模拟器会循环使用。</p>
+                    <p style="margin: 4px 0; color: #e6a23c;"><b>降级策略：</b>目录留空或 STS 凭证获取失败时，仅发 file_upload_callback（元数据上报），object_key 指向不存在的文件。平台可验证 MQTT 协议但无法下载真实文件。</p>
+                    <p style="margin: 4px 0; color: #67c23a;">提示：配置后无需重启，点击"保存并检测"即生效。与直播推流共享同一持久化配置。</p>
+                </div>
+            </el-collapse-item>
             <el-collapse-item title="配置说明" name="note">
                 <div style="font-size: 13px; color: #606266; line-height: 1.8;">
                     <p style="margin: 4px 0;">配置修改后点击"保存并检测"将自动重新检测 ffmpeg 能力，<b>无需重启应用</b>。</p>
@@ -798,6 +888,33 @@
         <template #footer>
             <el-button @click="showLiveConfigDialog = false">关闭</el-button>
             <el-button type="primary" @click="saveLiveConfig">保存并检测</el-button>
+        </template>
+    </el-dialog>
+
+    <!-- 高德地图配置弹窗 -->
+    <el-dialog v-model="showAmapConfigDialog" title="高德地图配置" width="480px">
+        <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px;">
+            <template #title>如何申请高德地图 JS API Key</template>
+            <div style="font-size: 12px; line-height: 1.8; color: #606266;">
+                <div>1. 访问 <a href="https://lbs.amap.com/" target="_blank" style="color: var(--accent);">高德开放平台</a> 注册账号</div>
+                <div>2. 进入「应用管理 → 我的应用 → 创建新应用」</div>
+                <div>3. 应用类型选择 <strong>Web端(JS API)</strong>，创建后获取 Key</div>
+                <div>4. 如需安全密钥：在应用详情页获取「安全密钥」(securityJsCode)</div>
+                <div>5. 将 Key 和安全密钥填入下方并保存</div>
+            </div>
+        </el-alert>
+        <el-form label-width="90px" size="small">
+            <el-form-item label="JS API Key">
+                <el-input v-model="amapKey" placeholder="高德 JS API Key"></el-input>
+            </el-form-item>
+            <el-form-item label="安全密钥">
+                <el-input v-model="amapSecurityCode" placeholder="安全密钥（可选）"></el-input>
+            </el-form-item>
+        </el-form>
+        <template #footer>
+            <el-button v-if="amapKeyApplied" @click="clearAmapKey">清除</el-button>
+            <el-button @click="showAmapConfigDialog = false">取消</el-button>
+            <el-button type="primary" @click="saveAmapKey">保存</el-button>
         </template>
     </el-dialog>
 
@@ -855,13 +972,33 @@ createApp({
         const streams = ref([]);
         const liveCapability = ref(null);
         const media = ref([]);
+
+        // 机场位置（用户手动输入经纬度+高度，持久化到后端配置文件）
+        const locationEdit = reactive({ latitude: 30.670815, longitude: 104.071523, height: 500.0 });
+        // 无人机实时位置（飞行时由后端按步骤更新，前端轮询展示）
+        const dronePosition = reactive({ latitude: 0, longitude: 0, height: 0, mode_code: 0, in_dock: true, activated: false });
+        // 高德地图：Key 存 localStorage，有效时显示地图，无效时回退手动输入
+        const amapKey = ref(localStorage.getItem('amapKey') || '');
+        const amapSecurityCode = ref(localStorage.getItem('amapSecurityCode') || '');
+        const mapMode = ref('manual'); // 'map' 或 'manual'
+        const amapKeyApplied = ref(false); // 高德 Key 是否已验证通过
+        const showAmapConfigDialog = ref(false); // 高德地图配置弹窗
+        const selectingAirport = ref(false); // 机场位置选点模式
+        const addressSearch = ref(''); // 地址搜索输入
+        let amapInstance = null;
+        let amapAutoComplete = null;
+        let airportMarker = null;
+        let airportInfoWindow = null;
+        let droneMarker = null;
+        let droneTrail = [];
+        let dronePolyline = null;
         const logs = ref([]);
         const connecting = ref(false);
         const powered = ref(false);
         const mqttError = ref(false);
         const deviceInfo = ref({});
         const showRegisterDialog = ref(false);
-        // App License 是否已锁定：首次注册成功后 localStorage 中存在 locked_app_license
+        // DJI License 是否已锁定：首次注册成功后 localStorage 中存在 locked_app_license
         // 锁定后注册界面隐藏 License 输入行（license 由第三方平台下发，用户再次输入不起作用）
         const licenseLocked = ref(!!localStorage.getItem('locked_app_license'));
         const showDeviceInfoDialog = ref(false);
@@ -872,7 +1009,8 @@ createApp({
         // 覆盖率报告
         const showCoverageDialog = ref(false);
         const showLiveConfigDialog = ref(false);
-        const liveConfigEdit = ref({ realPushEnabled: false, ffmpegPath: 'ffmpeg', videoDir: '' });
+        const liveConfigEdit = ref({ realPushEnabled: false, ffmpegPath: 'ffmpeg', videoDir: '', mediaDir: '' });
+        const mediaDirValue = ref('');  // 当前 mediaDir（从 /api/live/capability 顶层获取，非 capability 内）
         const liveConfigSaveResult = ref(null);  // 保存后的验证结果反馈
         const installingFfmpeg = ref(false);  // FFmpeg 一键安装中状态
         const installProgress = ref([]);      // winget 实时输出行
@@ -967,7 +1105,7 @@ createApp({
             'S-3': '上线流程异常',
             'P-2': '无法链接到第三方平台',
             'P-3': '第三方平台凭证有误',
-            'P-4': 'App License 校验失败，请检查 License 配置',
+            'P-4': 'DJI License 校验失败，请检查 License 配置',
         };
 
         // localStorage 持久化
@@ -1025,6 +1163,7 @@ createApp({
         async function loadLiveCapability() {
             const data = await fetchJSON('/api/live/capability');
             liveCapability.value = data?.capability || null;
+            mediaDirValue.value = data?.mediaDir || '';
         }
         async function refreshLiveCapability() {
             const data = await fetchJSON('/api/live/capability/refresh', { method: 'POST' });
@@ -1037,7 +1176,8 @@ createApp({
                 liveConfigEdit.value = {
                     realPushEnabled: liveCapability.value.realPushEnabled,
                     ffmpegPath: liveCapability.value.ffmpegPath || 'ffmpeg',
-                    videoDir: liveCapability.value.videoDir || ''
+                    videoDir: liveCapability.value.videoDir || '',
+                    mediaDir: mediaDirValue.value || ''
                 };
             }
             liveConfigSaveResult.value = null;
@@ -1491,6 +1631,308 @@ createApp({
             });
         }
 
+        // 机场位置：加载/保存（持久化到后端配置文件）
+        async function loadLocation() {
+            const data = await fetchJSON('/api/location');
+            if (data) {
+                locationEdit.latitude = data.latitude;
+                locationEdit.longitude = data.longitude;
+                locationEdit.height = data.height;
+            }
+        }
+        async function saveLocation() {
+            const data = await fetchJSON('/api/location', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(locationEdit)
+            });
+            if (data) {
+                if (data.success) {
+                    ElementPlus.ElMessage.success('机场位置已保存');
+                    locationEdit.latitude = data.latitude;
+                    locationEdit.longitude = data.longitude;
+                    locationEdit.height = data.height;
+                    updateAirportMarker();
+                } else {
+                    ElementPlus.ElMessage.error(data.message || '机场位置保存失败');
+                }
+            }
+        }
+
+        // 高德地图：保存 Key 并初始化
+        function saveAmapKey() {
+            const key = amapKey.value.trim();
+            const code = amapSecurityCode.value.trim();
+            if (!key) {
+                ElementPlus.ElMessage.warning('请输入高德 JS API Key');
+                return;
+            }
+            localStorage.setItem('amapKey', key);
+            if (code) {
+                localStorage.setItem('amapSecurityCode', code);
+            } else {
+                localStorage.removeItem('amapSecurityCode');
+            }
+            showAmapConfigDialog.value = false;
+            initAmap(key, code);
+        }
+
+        // 高德地图：清除 Key 并回退手动模式
+        function clearAmapKey() {
+            localStorage.removeItem('amapKey');
+            localStorage.removeItem('amapSecurityCode');
+            amapKey.value = '';
+            amapSecurityCode.value = '';
+            amapKeyApplied.value = false;
+            mapMode.value = 'manual';
+            if (amapInstance) {
+                amapInstance.destroy();
+            }
+            amapInstance = null;
+            amapAutoComplete = null;
+            airportMarker = null;
+            airportInfoWindow = null;
+            droneMarker = null;
+            dronePolyline = null;
+            droneTrail = [];
+            showAmapConfigDialog.value = false;
+            ElementPlus.ElMessage.info('已清除高德 Key，切换到手动输入模式');
+        }
+
+        // 模式切换处理
+        function onMapModeChange(mode) {
+            if (mode === 'map' && amapKeyApplied.value && !amapInstance) {
+                // 切换到地图模式但地图未初始化
+                initAmap(amapKey.value.trim(), amapSecurityCode.value.trim());
+            }
+        }
+
+        // 动态加载高德 JS API
+        function initAmap(key, securityCode) {
+            // 高德 JS API 2.0 安全密钥配置
+            if (securityCode) {
+                window._AMapSecurityConfig = { securityJsCode: securityCode };
+            }
+            if (window.AMap) {
+                createMap();
+                return;
+            }
+            const script = document.createElement('script');
+            script.src = `https://webapi.amap.com/maps?v=2.0&key=${key}&plugin=AMap.AutoComplete`;
+            script.onload = () => createMap();
+            script.onerror = () => {
+                amapKeyApplied.value = false;
+                mapMode.value = 'manual';
+                ElementPlus.ElMessage.error('高德 JS API 加载失败，请检查 Key 或网络');
+            };
+            document.head.appendChild(script);
+        }
+
+        // 创建地图实例 + Marker + 轨迹线
+        function createMap() {
+            // 先切换模式让 mapContainer div 渲染，再在 nextTick 中创建地图
+            mapMode.value = 'map';
+            nextTick(() => {
+                try {
+                    amapInstance = new AMap.Map('mapContainer', {
+                        zoom: 16,
+                        center: [locationEdit.longitude, locationEdit.latitude]
+                    });
+                    // 机场 Marker（可拖拽选点）
+                    airportMarker = new AMap.Marker({
+                        position: [locationEdit.longitude, locationEdit.latitude],
+                        draggable: true,
+                        title: '机场位置'
+                    });
+                    airportMarker.on('dragging', (e) => {
+                        locationEdit.longitude = e.lnglat.getLng();
+                        locationEdit.latitude = e.lnglat.getLat();
+                    });
+                    airportMarker.on('dragend', (e) => {
+                        setAirportLocation(e.lnglat.getLng(), e.lnglat.getLat());
+                    });
+                    // 鼠标悬停显示经纬度和高度
+                    airportInfoWindow = new AMap.InfoWindow({
+                        offset: new AMap.Pixel(0, -30),
+                        closeWhenClickMap: false
+                    });
+                    airportMarker.on('mouseover', () => {
+                        updateAirportInfoWindow();
+                        airportInfoWindow.open(amapInstance, airportMarker.getPosition());
+                    });
+                    airportMarker.on('mouseout', () => {
+                        airportInfoWindow.close();
+                    });
+                    amapInstance.add(airportMarker);
+                    // 无人机 Marker（初始隐藏，激活后显示）
+                    droneMarker = new AMap.Marker({
+                        position: [locationEdit.longitude, locationEdit.latitude],
+                        title: '无人机'
+                    });
+                    amapInstance.add(droneMarker);
+                    droneMarker.hide();
+                    // 轨迹线
+                    droneTrail = [];
+                    dronePolyline = new AMap.Polyline({
+                        path: [],
+                        strokeColor: '#FF0000',
+                        strokeWeight: 3,
+                        strokeOpacity: 0.8
+                    });
+                    amapInstance.add(dronePolyline);
+                    // 创建复用的 AutoComplete 实例（供 el-autocomplete 的 fetch-suggestions 回调使用）
+                    amapAutoComplete = new AMap.AutoComplete({ city: '全国' });
+                    amapKeyApplied.value = true;
+                    ElementPlus.ElMessage.success('高德地图已加载');
+                } catch(e) {
+                    console.error('高德地图初始化失败:', e);
+                    amapKeyApplied.value = false;
+                    mapMode.value = 'manual';
+                    ElementPlus.ElMessage.error('高德地图初始化失败，请检查 Key 是否正确');
+                }
+            });
+        }
+
+        // 设置机场位置：更新坐标、Marker，获取高程后自动保存（地图选点/拖动 Marker 共用）
+        async function setAirportLocation(lng, lat) {
+            locationEdit.longitude = lng;
+            locationEdit.latitude = lat;
+            if (airportMarker) {
+                airportMarker.setPosition([lng, lat]);
+            }
+            await fetchElevation(lat, lng);
+            await saveLocation();
+        }
+
+        // el-autocomplete 获取地址建议列表（调用 AMap.AutoComplete.search）
+        function fetchAddressSuggestions(queryString, callback) {
+            if (!queryString || !queryString.trim() || !amapAutoComplete) {
+                callback([]);
+                return;
+            }
+            amapAutoComplete.search(queryString.trim(), (status, result) => {
+                if (status === 'complete' && result && result.tips) {
+                    const suggestions = result.tips
+                        .filter(tip => tip.location)
+                        .map(tip => ({ value: tip.name, location: tip.location }));
+                    callback(suggestions);
+                } else {
+                    callback([]);
+                }
+            });
+        }
+
+        // el-autocomplete 选中地址建议：仅移动地图中心到目标位置，不修改机场坐标
+        function onAddressSelect(item) {
+            if (item && item.location && amapInstance) {
+                amapInstance.setZoomAndCenter(16, [item.location.lng, item.location.lat]);
+            }
+        }
+
+        // 保存机场位置后更新地图 Marker
+        function updateAirportMarker() {
+            if (mapMode.value !== 'map' || !airportMarker) return;
+            airportMarker.setPosition([locationEdit.longitude, locationEdit.latitude]);
+            amapInstance.setCenter([locationEdit.longitude, locationEdit.latitude]);
+        }
+
+        // 更新机场 InfoWindow 内容（经纬度+高度）
+        function updateAirportInfoWindow() {
+            if (!airportInfoWindow) return;
+            const content = `<div style="padding:4px 8px; font-size:12px; white-space:nowrap;">
+                <div>纬度: ${locationEdit.latitude.toFixed(6)}</div>
+                <div>经度: ${locationEdit.longitude.toFixed(6)}</div>
+                <div>高度: ${locationEdit.height.toFixed(1)}m</div>
+            </div>`;
+            airportInfoWindow.setContent(content);
+        }
+
+        // 进入机场位置选点模式
+        function startSelectAirport() {
+            if (mapMode.value !== 'map' || !amapInstance || selectingAirport.value) return;
+            selectingAirport.value = true;
+            amapInstance.setDefaultCursor('crosshair');
+            airportMarker.setDraggable(false);
+            amapInstance.on('click', onMapClickSelectAirport);
+        }
+
+        // 取消选点模式
+        function cancelSelectAirport() {
+            selectingAirport.value = false;
+            if (amapInstance) {
+                amapInstance.setDefaultCursor('');
+                amapInstance.off('click', onMapClickSelectAirport);
+            }
+            if (airportMarker) {
+                airportMarker.setDraggable(true);
+            }
+        }
+
+        // 地图点击选点回调
+        function onMapClickSelectAirport(e) {
+            const lng = e.lnglat.getLng();
+            const lat = e.lnglat.getLat();
+            setAirportLocation(lng, lat);
+            cancelSelectAirport();
+            ElementPlus.ElMessage.success('已选择机场位置，正在查询海拔...');
+        }
+
+        // 查询海拔高度（Open-Meteo Elevation API，免费无需 Key）
+        async function fetchElevation(lat, lng) {
+            try {
+                const resp = await fetch(`https://api.open-meteo.com/v1/elevation?latitude=${lat}&longitude=${lng}`);
+                const data = await resp.json();
+                if (data.elevation !== undefined && data.elevation !== null) {
+                    locationEdit.height = Math.round(data.elevation * 10) / 10;
+                    ElementPlus.ElMessage.success(`已获取海拔高度 ${locationEdit.height}m`);
+                } else {
+                    ElementPlus.ElMessage.warning('海拔查询无数据，请手动输入高度');
+                }
+            } catch(e) {
+                console.error('海拔查询失败:', e);
+                ElementPlus.ElMessage.warning('海拔查询失败，请手动输入高度');
+            }
+        }
+
+        // 无人机位置变化时更新地图 Marker + 轨迹
+        function updateDroneMarker() {
+            if (mapMode.value !== 'map' || !droneMarker) return;
+            if (!dronePosition.activated) {
+                droneMarker.hide();
+                return;
+            }
+            droneMarker.show();
+            const pos = [dronePosition.longitude, dronePosition.latitude];
+            droneMarker.setPosition(pos);
+            // 记录轨迹（位置变化时才添加）
+            const last = droneTrail[droneTrail.length - 1];
+            if (!last || last[0] !== pos[0] || last[1] !== pos[1]) {
+                droneTrail.push(pos);
+                dronePolyline.setPath(droneTrail);
+            }
+        }
+
+        // 无人机实时位置（轮询展示）
+        async function refreshDronePosition() {
+            const data = await fetchJSON('/api/drone/position');
+            if (data) {
+                dronePosition.latitude = data.latitude;
+                dronePosition.longitude = data.longitude;
+                dronePosition.height = data.height;
+                dronePosition.mode_code = data.mode_code;
+                dronePosition.in_dock = data.in_dock;
+                dronePosition.activated = data.activated;
+                updateDroneMarker();
+            }
+        }
+        // 无人机状态标签：在舱未激活=休眠，不在舱未激活=未知，激活后按 mode_code 映射
+        const droneStatusLabel = computed(() => {
+            if (!dronePosition.activated) return dronePosition.in_dock ? '休眠' : '未知';
+            const labels = { 0: '待机', 1: '起飞准备', 2: '起飞准备完毕', 4: '自动起飞',
+                              5: '航线飞行', 9: '自动返航', 10: '自动降落', 13: '返航降落' };
+            return labels[dronePosition.mode_code] || '未知';
+        });
+
         async function clearLogs() {
             await fetchJSON('/api/logs', { method: 'DELETE' });
             showMsgDrawer.value = false;
@@ -1536,7 +1978,7 @@ createApp({
         });
 
         async function pollAll() {
-            await Promise.all([refreshConnection(), refreshState(), refreshTask(), refreshStreams(), refreshMedia(), refreshLogs()]);
+            await Promise.all([refreshConnection(), refreshState(), refreshTask(), refreshStreams(), refreshMedia(), refreshLogs(), refreshDronePosition()]);
         }
 
         onMounted(() => {
@@ -1544,8 +1986,17 @@ createApp({
             refreshConfig();
             refreshDeviceInfo();
             loadLiveCapability();
+            loadLocation();
             pollAll();
             pollTimer = setInterval(pollAll, 2000);
+            // 高德地图：localStorage 有 Key 则自动加载
+            const savedKey = localStorage.getItem('amapKey');
+            const savedCode = localStorage.getItem('amapSecurityCode') || '';
+            if (savedKey) {
+                amapKey.value = savedKey;
+                amapSecurityCode.value = savedCode;
+                initAmap(savedKey, savedCode);
+            }
         });
 
         onUnmounted(() => {
@@ -1568,7 +2019,12 @@ createApp({
                  liveCapability, loadLiveCapability, refreshLiveCapability,
                  showLiveConfigDialog, liveConfigEdit, liveConfigSaveResult, installingFfmpeg,
                  installProgress, installElapsed,
-                 openLiveConfigDialog, saveLiveConfig, installFfmpeg };
+                 openLiveConfigDialog, saveLiveConfig, installFfmpeg,
+                 locationEdit, dronePosition, droneStatusLabel, saveLocation,
+                 amapKey, amapSecurityCode, mapMode, amapKeyApplied,
+                 showAmapConfigDialog, saveAmapKey, clearAmapKey, onMapModeChange,
+                 selectingAirport, startSelectAirport, cancelSelectAirport,
+                 addressSearch, fetchAddressSuggestions, onAddressSelect };
     }
 }).use(ElementPlus).mount('#app');
 // Vue 挂载完成，移除加载占位

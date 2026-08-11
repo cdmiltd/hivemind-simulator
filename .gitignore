@@ -7,3 +7,4 @@ target/
 .vscode/
 .DS_Store
 *.log
+AGENTS.md

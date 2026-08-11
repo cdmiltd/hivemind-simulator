@@ -1,0 +1,276 @@
+// Copyright (C) 2026 CDMI
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+package ltd.cdmi.hivemind.simulator.mqtt;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticCode;
+import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
+import org.eclipse.paho.client.mqttv3.MqttCallbackExtended;
+import org.eclipse.paho.client.mqttv3.MqttClient;
+import org.eclipse.paho.client.mqttv3.MqttConnectOptions;
+import org.eclipse.paho.client.mqttv3.MqttException;
+import org.eclipse.paho.client.mqttv3.MqttMessage;
+import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.nio.charset.StandardCharsets;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
+/**
+ * 监控器 MQTT 客户端：作为第三方监控端连接到 DJI Cloud API 平台。
+ * <p>独立于 {@link MqttClientManager}，订阅通配符 topic 监听所有设备的数据。</p>
+ */
+public class MonitorMqttClient implements MqttCallbackExtended {
+
+    private static final Logger log = LoggerFactory.getLogger(MonitorMqttClient.class);
+
+    /** 监控器订阅的通配符 topic（匹配所有设备 SN） */
+    private static final String[] SUBSCRIBE_TOPICS = {
+        // 上行（设备→云）
+        "sys/product/+/status",           // 设备上下线（update_topo）
+        "thing/product/+/osd",            // OSD 遥测数据
+        "thing/product/+/state",          // 状态变更
+        "thing/product/+/drc/up",         // DRC 上行通道（DRC 模式状态推送）
+        "thing/product/+/events",         // 事件上报
+        "thing/product/+/requests",       // 设备请求
+        "thing/product/+/services_reply", // 服务指令回复
+        "thing/product/+/property/set_reply", // 属性设置回复
+        // 下行（云→设备）
+        "sys/product/+/status_reply",     // 拓扑回复
+        "thing/product/+/services",       // 服务指令下发
+        "thing/product/+/property/set",   // 属性设置下发
+        "thing/product/+/events_reply",   // 事件回复
+        "thing/product/+/requests_reply", // 请求回复
+    };
+
+    private final ObjectMapper objectMapper;
+    private final MessageHandler messageHandler;
+
+    private volatile MqttClient client;
+    private volatile boolean connected = false;
+
+    /** 消息日志缓冲默认大小（当未传入配置时使用） */
+    private static final int DEFAULT_MAX_LOG_SIZE = 2000;
+    private final int maxLogSize;
+    private final List<Map<String, Object>> messageLogs = Collections.synchronizedList(new ArrayList<>());
+
+    /** 消息处理器接口 */
+    @FunctionalInterface
+    public interface MessageHandler {
+        void onMessage(String topic, String payload);
+    }
+
+    public MonitorMqttClient(ObjectMapper objectMapper, MessageHandler messageHandler, int maxLogSize) {
+        this.objectMapper = objectMapper;
+        this.messageHandler = messageHandler;
+        this.maxLogSize = maxLogSize > 0 ? maxLogSize : DEFAULT_MAX_LOG_SIZE;
+    }
+
+    /**
+     * 连接到 MQTT Broker。
+     * @param host broker 地址
+     * @param port broker 端口
+     * @param username 用户名（可为空）
+     * @param password 密码（可为空）
+     * @param clientIdPrefix 客户端 ID 前缀（来自配置 mqtt.monitor-client-id-prefix）
+     * @return 诊断码：null=成功；{@link DiagnosticCode#PLATFORM_AUTH_FAILED}=凭证错误；{@link DiagnosticCode#PLATFORM_HOST_UNREACHABLE}=地址不可达
+     */
+    public synchronized DiagnosticCode connect(String host, int port, String username, String password, String clientIdPrefix) {
+        try {
+            String prefix = (clientIdPrefix != null && !clientIdPrefix.isEmpty()) ? clientIdPrefix : "monitor-";
+            String clientId = prefix + UUID.randomUUID().toString().substring(0, 8);
+            String brokerUri = "tcp://" + host + ":" + port;
+
+            client = new MqttClient(brokerUri, clientId, new MemoryPersistence());
+
+            MqttConnectOptions options = new MqttConnectOptions();
+            if (username != null && !username.isEmpty()) {
+                options.setUserName(username);
+            }
+            if (password != null && !password.isEmpty()) {
+                options.setPassword(password.toCharArray());
+            }
+            options.setAutomaticReconnect(true);
+            options.setCleanSession(true);
+            options.setConnectionTimeout(3);
+            options.setKeepAliveInterval(30);
+
+            client.setCallback(this);
+            client.connect(options);
+            connected = true;
+            log.info("监控器 MQTT 已连接，clientId={}, broker={}", clientId, brokerUri);
+            return null;
+        } catch (MqttException e) {
+            if (e.getReasonCode() == MqttException.REASON_CODE_FAILED_AUTHENTICATION) {
+                log.error("监控器 MQTT 认证失败: {}", e.getMessage());
+                return DiagnosticCode.PLATFORM_AUTH_FAILED;
+            }
+            log.error("监控器 MQTT 连接失败: {}", e.getMessage());
+            return DiagnosticCode.PLATFORM_HOST_UNREACHABLE;
+        } catch (Exception e) {
+            log.error("监控器 MQTT 连接初始化失败: {}", e.getMessage());
+            return DiagnosticCode.PLATFORM_HOST_UNREACHABLE;
+        }
+    }
+
+    /**
+     * 断开 MQTT 连接。
+     */
+    public synchronized void disconnect() {
+        connected = false;
+        try {
+            if (client != null) {
+                if (client.isConnected()) {
+                    client.disconnect();
+                }
+                client.close();
+            }
+        } catch (Exception e) {
+            log.warn("监控器 MQTT 断开异常: {}", e.getMessage());
+        }
+        client = null;
+        log.info("监控器 MQTT 已断开");
+    }
+
+    /**
+     * 发布消息到指定 topic。
+     */
+    public void publish(String topic, String payload) {
+        if (client == null || !client.isConnected()) {
+            log.warn("监控器 MQTT 未连接，丢弃消息 topic={}", topic);
+            return;
+        }
+        try {
+            MqttMessage message = new MqttMessage(payload.getBytes(StandardCharsets.UTF_8));
+            message.setQos(1);
+            client.publish(topic, message);
+            // 不在此处记录日志：MQTT 回环会触发 messageArrived，统一在那里根据 topic 方向记录
+            log.debug("监控器已发布 topic={}", topic);
+        } catch (Exception e) {
+            log.error("监控器发布消息失败 topic={}: {}", topic, e.getMessage());
+        }
+    }
+
+    public boolean isConnected() {
+        return connected && client != null && client.isConnected();
+    }
+
+    // ==================== MQTT 回调 ====================
+
+    @Override
+    public void connectComplete(boolean reconnect, String serverURI) {
+        if (reconnect) {
+            log.info("监控器 MQTT 已重连，重新订阅 topic");
+        } else {
+            log.info("监控器 MQTT 首次连接成功");
+        }
+        for (String topic : SUBSCRIBE_TOPICS) {
+            try {
+                client.subscribe(topic, 1);
+                log.debug("监控器已订阅: {}", topic);
+            } catch (Exception e) {
+                log.error("监控器订阅失败: {} - {}", topic, e.getMessage());
+            }
+        }
+    }
+
+    @Override
+    public void connectionLost(Throwable cause) {
+        connected = false;
+        log.warn("监控器 MQTT 连接断开，等待自动重连: {}", cause == null ? "unknown" : cause.getMessage());
+    }
+
+    @Override
+    public void messageArrived(String topic, MqttMessage message) {
+        String payload = new String(message.getPayload(), StandardCharsets.UTF_8);
+        log.debug("监控器收到消息 topic={}", topic);
+        // 根据 topic 方向推断消息方向（上行=recv，下行=send），
+        // 监控器自己发布的消息也会通过 MQTT 回环到达此处，统一由 topic 推断方向
+        addLog(inferDirection(topic), topic, payload);
+        if (messageHandler != null) {
+            try {
+                messageHandler.onMessage(topic, payload);
+            } catch (Exception e) {
+                log.error("监控器消息处理异常 topic={}: {}", topic, e.getMessage());
+            }
+        }
+    }
+
+    @Override
+    public void deliveryComplete(IMqttDeliveryToken token) {
+    }
+
+    // ==================== 日志 ====================
+
+    /**
+     * 根据 topic 推断消息方向（监控器/平台视角）。
+     * <ul>
+     *   <li>下行 topic（平台 → 设备）：services / property/set / events_reply / requests_reply / status_reply → "send"</li>
+     *   <li>上行 topic（设备 → 平台）：osd / state / events / requests / services_reply / property/set_reply / status / drc/up → "recv"</li>
+     * </ul>
+     */
+    private String inferDirection(String topic) {
+        if (topic.endsWith("/services")
+                || topic.endsWith("/property/set")
+                || topic.endsWith("/events_reply")
+                || topic.endsWith("/requests_reply")
+                || topic.endsWith("/status_reply")) {
+            return "send"; // 平台 → 设备
+        }
+        return "recv"; // 设备 → 平台
+    }
+
+    public List<Map<String, Object>> getLogs() {
+        synchronized (messageLogs) {
+            return new ArrayList<>(messageLogs);
+        }
+    }
+
+    public void clearLogs() {
+        synchronized (messageLogs) {
+            messageLogs.clear();
+        }
+    }
+
+    private void addLog(String direction, String topic, String payload) {
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("time", LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss.SSS")));
+        entry.put("direction", direction);
+        entry.put("topic", topic);
+        try {
+            JsonNode node = objectMapper.readTree(payload);
+            entry.put("method", node.path("method").asText(""));
+        } catch (Exception e) {
+            entry.put("method", "");
+        }
+        entry.put("payload", payload);
+        synchronized (messageLogs) {
+            if (messageLogs.size() >= maxLogSize) {
+                messageLogs.remove(0);
+            }
+            messageLogs.add(entry);
+        }
+    }
+}
