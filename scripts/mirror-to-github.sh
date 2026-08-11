@@ -12,9 +12,23 @@
 
 set -euo pipefail
 
-TAG="${1:?Usage: $0 <tag>，例如: $0 v1.0.0}"
 GITHUB_SSH_URL="git@github.com:cdmiltd/hivemind-simulator.git"
 GITHUB_HTTPS_URL="https://github.com/cdmiltd/hivemind-simulator.git"
+
+# 自动检测 tag：优先使用参数，其次从 CI 环境变量，最后从 git 自动检测
+TAG="${1:-}"
+if [[ -z "$TAG" ]]; then
+    TAG="${CI_COMMIT_REF_NAME:-}"
+fi
+if [[ -z "$TAG" ]]; then
+    TAG=$(git describe --tags --exact-match HEAD 2>/dev/null || true)
+fi
+if [[ -z "$TAG" ]]; then
+    echo "错误: 无法确定 tag，请传入参数或确保在 tag commit 上运行"
+    echo "用法: $0 <tag>，例如: $0 v1.0.0"
+    exit 1
+fi
+echo "=== 检测到 tag: $TAG ==="
 
 # CI 环境：使用 Token 认证
 if [[ -n "${GITHUB_TOKEN:-}" ]]; then
