@@ -31,6 +31,54 @@
 - **监控器页面**：独立 MQTT 客户端，实时监听平台消息用于调试
 - **桌面端打包**：Tauri 打包为 Windows 安装包，内置 JRE
 
+## 架构概览
+
+```mermaid
+graph TB
+    subgraph 模拟器
+        WEB[Web 控制台<br/>Vue 3 + Element Plus]
+        BACK[Spring Boot 后端<br/>REST API + MQTT Client]
+        TAURI[Tauri 桌面端<br/>端口 9090→19090]
+    end
+
+    subgraph 云端
+        EMQX[EMQX Broker]
+        HIVE[hivemind 平台<br/>DJI Cloud API 后端]
+    end
+
+    WEB <-->|REST API| BACK
+    BACK <-->|MQTT| EMQX
+    EMQX <--> HIVE
+    TAURI --> BACK
+
+    style WEB fill:#0ea5e9,color:#fff
+    style BACK fill:#10b981,color:#fff
+    style EMQX fill:#f59e0b,color:#fff
+    style HIVE fill:#ef4444,color:#fff
+    style TAURI fill:#8b5cf6,color:#fff
+```
+
+## 注册流程
+
+```mermaid
+sequenceDiagram
+    participant 模拟器
+    participant EMQX
+    participant hivemind
+
+    模拟器->>EMQX: 建立 MQTT 连接
+    模拟器->>hivemind: config（上报设备配置）
+    hivemind-->>模拟器: config_reply（app_license）
+    模拟器->>hivemind: airport_bind_status（查询绑定状态）
+    hivemind-->>模拟器: bind_status_reply
+    模拟器->>hivemind: airport_organization_get（获取组织树）
+    hivemind-->>模拟器: organization_get_reply
+    模拟器->>hivemind: airport_organization_bind（绑定设备到组织）
+    hivemind-->>模拟器: organization_bind_reply
+    模拟器->>hivemind: update_topo（设备上线）
+    Note over 模拟器,hivemind: 注册完成，开始 OSD/State 上报
+```
+
 ## 技术栈
 
 | 层 | 技术 |
