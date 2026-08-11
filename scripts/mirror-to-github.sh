@@ -56,8 +56,8 @@ echo "=== 镜像推送 tag $TAG (commit ${COMMIT:0:8}) 到 GitHub ==="
 # 1. 推送 tag
 git push "$GITHUB_REMOTE" "refs/tags/$TAG"
 
-# 2. 将 tag 对应的 commit 推送到 GitHub main 分支（force，因为是镜像同步）
-git push --force "$GITHUB_REMOTE" "$COMMIT:refs/heads/main"
+# 2. 将 tag 对应的 commit 推送到 GitHub master 分支（force，因为是镜像同步）
+git push --force "$GITHUB_REMOTE" "$COMMIT:refs/heads/master"
 
 echo "=== 推送完成 ==="
 
@@ -68,7 +68,7 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
         --repo cdmiltd/hivemind-simulator \
         --title "$TAG" \
         --generate-notes \
-        --target main \
+        --target master \
         || echo "[警告] GitHub Release 创建失败，可手动创建: gh release create $TAG"
 else
     echo "[提示] gh CLI 未安装或未认证，跳过 GitHub Release 创建"
