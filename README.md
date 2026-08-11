@@ -5,6 +5,7 @@
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x-green.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)
 ![DJI Cloud API](https://img.shields.io/badge/DJI%20Cloud%20API-compatible-blue.svg)
+![Coverage](https://img.shields.io/badge/coverage-JaCoCo-blue.svg)
 
 模拟 DJI Dock（Dock1/Dock2/Dock3）机场及其配套飞行器（M30/M3D/M4D 系列）的完整云端交互流程，按 DJI Cloud API 协议经 MQTT 与巡飞平台（hivemind）通信。
 
@@ -14,10 +15,44 @@
 
 > 详见 [设计文档](docs/superpowers/specs/2026-08-08-dji-dock-simulator-design.md)。
 
+## 适用场景
+
+| 角色 | 价值 |
+|---|---|
+| DJI Cloud API 后端开发者 | 状态可控、场景可复现地验证平台代码，无需真实机场硬件 |
+| 无人机云平台集成商 | 联调测试 DJI 协议对接，快速回归 |
+| 司空私有版运维人员 | 不依赖真机即可演练设备上线、任务下发、直播等流程，辅助排查线上问题 |
+| DJI 机场协议学习者 | 通过时序图、消息日志、诊断系统理解 Cloud API 交互细节 |
+
+## 界面截图
+
+<p align="center">
+  <img src="assets/main-online.png" alt="主界面（设备在线）" width="720" />
+</p>
+
+<details>
+<summary>更多功能截图</summary>
+
+<br/>
+
+<p align="center">
+  <img src="assets/register-form.png" alt="注册配置弹窗" width="480" />
+</p>
+
+| 异常模拟 | 消息日志（MQTT 报文） |
+|---|---|
+| <img src="assets/exception.png" width="360" /> | <img src="assets/messages.png" width="360" /> |
+
+| 位置模拟（地图模式） | 监控器（已连接） |
+|---|---|
+| <img src="assets/location.png" width="360" /> | <img src="assets/monitor.png" width="360" /> |
+
+</details>
+
 ## 功能特性
 
 - **多机型支持**：Dock1/Dock2/Dock3 + M30/M3D/M4D 系列飞行器
-- **完整注册流程**：config → airport_bind_status → airport_organization_get → airport_organization_bind → update_topo 上线
+- **完整注册流程**：config → airport_bind_status → airport_organization_get → airport_organization_bind，注册成功后 update_topo 上线
 - **OSD/State 上报**：按设备类型构造差异化字段，支持事件性属性上报
 - **航线任务模拟**：接收平台下发任务，按时间推进进度并上报媒体文件
 - **直播推流**：支持 FFmpeg WHIP 真实推流（WebRTC），视频循环播放持续推流
@@ -75,8 +110,9 @@ sequenceDiagram
     hivemind-->>模拟器: organization_get_reply
     模拟器->>hivemind: airport_organization_bind（绑定设备到组织）
     hivemind-->>模拟器: organization_bind_reply
+    Note over 模拟器,hivemind: 注册完成
     模拟器->>hivemind: update_topo（设备上线）
-    Note over 模拟器,hivemind: 注册完成，开始 OSD/State 上报
+    Note over 模拟器,hivemind: 设备上线，开始 OSD/State 上报
 ```
 
 ## 技术栈
@@ -100,7 +136,7 @@ sequenceDiagram
 
 ### 方式一：桌面端安装（推荐）
 
-1. 下载最新版 `DJI Dock Simulator_x.x.x_x64-setup.exe` 安装包
+1. 下载最新版 [DJI Dock Simulator_x64-setup.exe](https://github.com/cdmiltd/hivemind-simulator/releases/latest) 安装包
 2. 运行安装程序
 3. 启动应用，自动打开控制台
 4. 填写配置后点击"注册到第三方平台"
@@ -136,8 +172,6 @@ mqtt:
   monitor-client-id-prefix: monitor-
 
 simulator:
-  # 设备型号 / SN / 组织ID / 绑定码 / DJI License 均由用户在注册时通过前端表单输入
-  # 默认设备型号：DOCK3 + M4TD（见 RuntimeConfig）
   location:
     latitude: 30.670815
     longitude: 104.071523
@@ -260,112 +294,44 @@ hivemind-simulator/
 
 ## 开发工作流
 
-### 双仓库架构
-
-| 仓库 | Remote 名 | 地址 | 用途 |
-|---|---|---|---|
-| 阿里云 codeup | `origin` | `codeup.aliyun.com/cdmi/cdmi-apps-all/dock-simulator.git` | 日常开发（私有） |
-| GitHub | `github` | `github.com/cdmiltd/hivemind-simulator.git` | 稳定版开源 |
-
-- 日常开发推送 `origin`（阿里云 codeup）
-- 稳定版本打 tag 后由 CI 自动镜像到 `github`（或手动执行 `scripts/mirror-to-github.sh`）
-- GitHub 的 `main` 分支仅包含 release tag 对应的代码，不包含日常开发中间提交
-
-### 分支策略（简化 Git Flow）
-
-```
-master (日常开发主线，推阿里云 origin)
- ├── feature/*  (功能分支，从 master 切出，开发完合并回 master)
- └── release/*  (发布分支，从 master 切出，用于稳定版测试)
-       ├── 最终测试 + bug fix
-       ├── 打 tag v1.0.0 → CI 自动镜像到 GitHub
-       └── bug fix cherry-pick 回 master
-```
-
-| 分支 | 所在仓库 | 生命周期 | 说明 |
-|---|---|---|---|
-| `master` | 阿里云 | 长期 | 日常开发主线，所有 feature 合入此处 |
-| `feature/*` | 阿里云 | 短期 | 功能开发分支，命名如 `feature/wayline-stop` |
-| `release/v*` | 阿里云 | 中期 | 发布准备分支，仅做 bug fix，不加新功能 |
-| `main` | GitHub | 长期 | 稳定版镜像，由 CI 脚本 force-push 更新 |
-
 ### 版本管理
 
-采用[语义化版本](https://semver.org/lang/zh-CN/) `vMAJOR.MINOR.PATCH`：
+采用[语义化版本](https://semver.org/lang/zh-CN/) `vMAJOR.MINOR.PATCH`，变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
-| 版本号 | 递增条件 | 示例 |
-|---|---|---|
-| MAJOR | 不兼容的 API 修改 | `v2.0.0` |
-| MINOR | 向下兼容的功能新增 | `v1.1.0` |
-| PATCH | 向下兼容的缺陷修复 | `v1.0.1` |
+### 参与贡献
 
-### 发布流程
+贡献流程、TDD 开发模式、代码规范、提交规范详见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-```bash
-# 1. 从 master 切出 release 分支
-git checkout master
-git pull origin master
-git checkout -b release/v1.0.0
+## Roadmap
 
-# 2. 最终测试 + bug fix（仅在 release 分支修复，不加新功能）
-# ... 测试通过后 ...
+以下为暂未支持、计划演进的方向，欢迎在 Issue 中讨论或认领（标注 `good first issue` 的适合首次贡献）：
 
-# 3. 打 tag
-git tag -a v1.0.0 -m "首个开源版本：DJI Dock 模拟器/监控器"
+- [ ] 固件升级、远程日志、自定义飞行区
+- [ ] 真实 KMZ 航线解析（当前按时间假推进进度）
+- [ ] 多机模拟（当前为单机）
+- [ ] Docker 化部署（docker-compose 含 EMQX）
+- [ ] 英文 README 与国际化 UI
+- [ ] 更多机型（如 M4E 等）
 
-# 4. 推送 tag 到阿里云（触发 CI 自动镜像）
-git push origin v1.0.0
-# CI 自动执行 scripts/mirror-to-github.sh，将 tag + main 分支推送到 GitHub
+> 当前与历史变更见 [CHANGELOG.md](CHANGELOG.md)。
 
-# 5.（CI 不可用时）手动推送
-./scripts/mirror-to-github.sh v1.0.0
+## 交流与支持
 
-# 6. release 分支的 bug fix 合并回 master
-git checkout master
-git merge release/v1.0.0
-git push origin master
-```
+<p align="center">
+  <img src="assets/friendCode.png" alt="微信二维码" width="220" />
+</p>
 
-### 阿里云 codeup CI 配置
+- 问题反馈与功能建议：请提交 [Issue](https://github.com/cdmiltd/hivemind-simulator/issues)
+- 贡献代码：请阅读 [CONTRIBUTING.md](CONTRIBUTING.md)
+- 微信沟通：扫码添加（上方二维码）
 
-CI 配置文件 `.codeup/flow-mirror.yml` 仅存在于本地和 Codeup 流水线配置中（已加入 `.gitignore`，不上传仓库）。
+## 支持作者
 
-**一次性配置步骤**：
-1. 在 [codeup Web 界面](https://codeup.aliyun.com) → 流水线 → 新建流水线 → YAML 模式
-2. 关联 `.codeup/flow-mirror.yml` 文件（或直接在 Web 界面粘贴内容）
-3. 在流水线「代码源」中创建 codeup 服务连接，将 ID 填入 YAML 的 `serviceConnection`
-4. 在流水线「变量与缓存 → 自定义变量」中添加 `GITHUB_TOKEN`（[GitHub Personal Access Token](https://github.com/settings/tokens)，需 `repo` 权限）
-5. 保存后，每次推送 `v*` 格式的 tag 将自动触发镜像推送
+如果这个项目对你的工作有帮助，欢迎打赏支持，激励持续维护与功能演进。
 
-### GitHub Issue 拉取与分析
-
-在 Trae IDE 中使用 `gh` CLI 拉取 GitHub Issue，AI 分析后人工修复：
-
-```bash
-# 前提：安装 gh CLI 并认证（gh auth login）
-
-# 列出 open issues
-gh issue list --repo cdmiltd/hivemind-simulator --state open
-
-# 查看特定 issue 详情
-gh issue view <number> --repo cdmiltd/hivemind-simulator
-
-# 批量拉取为 JSON（便于 AI 分析）
-gh issue list --repo cdmiltd/hivemind-simulator --state open --json number,title,body,labels
-```
-
-**AI 分析流程**：
-1. 在 Trae 中执行 `gh issue list` 拉取 Issue 列表
-2. 将 Issue 内容提供给 AI 分析（Bug 报告 / 功能请求 / 文档问题）
-3. AI 根据 [TDD-SPEC.md](docs/TDD-SPEC.md) 规格生成修复方案
-4. 人工审核方案后在阿里云仓库实施修复
-5. 修复随下一个 release 版本发布到 GitHub，自动关闭对应 Issue
-
-## 不支持的功能
-
-- 固件升级、远程日志、自定义飞行区
-- 真实 KMZ 航线解析（进度按时间假推进）
-- 多机模拟（单机，后续可扩展）
+<p align="center">
+  <img src="assets/PayCode.png" alt="收款码" width="220" />
+</p>
 
 ## 开源协议
 
@@ -375,3 +341,5 @@ gh issue list --repo cdmiltd/hivemind-simulator --state open --json number,title
 - 衍生作品必须以相同协议开源
 - 通过网络提供服务（SaaS）也必须公开源代码
 - 商业使用需遵守 AGPLv3 条款
+
+> **为何选择 AGPLv3**：本项目定位为调试工具，希望保持开放共享；AGPLv3 确保任何通过网络提供本软件或其衍生品的服务都必须公开源代码，避免被直接商业化套壳而不回馈社区。如需商业授权，请联系维护者。

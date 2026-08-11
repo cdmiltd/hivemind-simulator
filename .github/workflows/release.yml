@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Maven
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+
+      - name: Build with Maven
+        run: mvn package -DskipTests -B
+
+      - name: Detect modules and create runtime
+        shell: bash
+        run: |
+          JAR=$(ls target/*.jar | grep -v original | head -1)
+          echo "JAR: $JAR"
+          MODULES=$(jdeps --print-module-deps --ignore-missing-deps --multi-release 21 "$JAR" 2>/dev/null || echo "java.base,java.desktop,java.logging,java.management,java.naming,java.net.http,java.scripting,java.sql,java.transaction.xa,java.xml,jdk.crypto.cryptoki,jdk.crypto.ec,jdk.unsupported")
+          echo "Modules: $MODULES"
+          jlink --no-header-files --no-man-pages --compress=2 --strip-debug --add-modules "$MODULES" --output target/runtime
+
+      - name: Verify runtime
+        shell: bash
+        run: |
+          JAR=$(ls target/*.jar | grep -v original | head -1)
+          target/runtime/bin/java -jar "$JAR" &
+          PID=$!
+          sleep 8
+          if kill -0 $PID 2>/dev/null; then
+            echo "Runtime verification passed"
+            kill $PID
+          else
+            echo "Runtime verification failed"
+            exit 1
+          fi
+
+      - name: Build Tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: '${{ github.ref_name }}'
+          releaseDraft: false
+          args: --target x86_64-pc-windows-msvc
