@@ -1,0 +1,61 @@
+# ========================================
+# DJI Dock 模拟器/监控器配置
+# ========================================
+# MQTT 公共配置（模拟器与监控器共享连接参数，各自独立的 clientId 前缀）
+# 凭据需与 hivemind application.yml 的 mqtt.username/password 一致
+mqtt:
+  host: 127.0.0.1
+  port: 1883
+  username: your-mqtt-username
+  password: your-mqtt-password
+  simulator-client-id-prefix: dock-sim-
+  monitor-client-id-prefix: monitor-
+
+simulator:
+  # 模拟设备信息
+  # dock-type: DOCK1/Dock1, DOCK2/Dock2, DOCK3/Dock3
+  # drone-type: M30/M30T(Dock1), M3D/M3TD(Dock2), M4D/M4TD(Dock3)
+  device:
+    dock-sn: 7UUXN1Q00A008W
+    drone-sn: 1081F8HGD25110010059
+    dock-type: DOCK3
+    drone-type: M4TD
+    organization-id: your-organization-id
+    device-binding-code: your-binding-code
+    # DJI App License（从开发者网站 Cloud API 类型 App 申请，桌面端用户在注册时填写覆盖）
+    app-license: ""
+  # 机场默认位置（默认成都，与 hivemind 默认地图中心一致）
+  location:
+    latitude: 30.670815
+    longitude: 104.071523
+    height: 500.0
+  # 指令通讯窗口日志配置
+  log:
+    max-size: 2000
+  # 直播推流配置
+  # real-push-enabled: true 启用真实推流（需本机 ffmpeg 支持 WHIP，即 --enable-muxer=whip 编译）
+  # ffmpeg-path: ffmpeg 可执行文件路径，默认 "ffmpeg" 从 PATH 查找
+  # video-dir: 视频文件目录，按 {camera_index}-{video_type}.mp4 命名查找（如 165-0-7-normal.mp4）
+  # 仅支持 WebRTC (url_type=4)，RTMP/GB28181 降级为协议模拟
+  live:
+    real-push-enabled: false
+    ffmpeg-path: ffmpeg
+    video-dir: ""
+
+# ========================================
+# Web 控制台端口
+# ========================================
+server:
+  port: 9090
+
+# 禁用静态资源缓存，确保修改 index.html 后刷新即生效
+spring:
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          no-cache: true
+
+logging:
+  level:
+    ltd.cdmi.simulator: DEBUG
