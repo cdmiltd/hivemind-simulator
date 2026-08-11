@@ -59,11 +59,25 @@ fi
 COMMIT=$(git rev-list -n 1 "$TAG")
 echo "=== 镜像推送 tag $TAG (commit ${COMMIT:0:8}) 到 GitHub ==="
 
+# 重试函数：codeup 访问 GitHub 网络偶发不稳定，自动重试
+retry() {
+    local max=3 delay=10 i=1
+    while ! "$@"; do
+        if (( i >= max )); then
+            echo "错误: 重试 $i 次后仍失败"
+            return 1
+        fi
+        echo "第 $i 次失败，${delay}s 后重试..."
+        sleep $delay
+        ((i++))
+    done
+}
+
 # 1. 推送 tag
-git push "$GITHUB_REMOTE" "refs/tags/$TAG"
+retry git push "$GITHUB_REMOTE" "refs/tags/$TAG"
 
 # 2. 将 tag 对应的 commit 推送到 GitHub master 分支（force，因为是镜像同步）
-git push --force "$GITHUB_REMOTE" "$COMMIT:refs/heads/master"
+retry git push --force "$GITHUB_REMOTE" "$COMMIT:refs/heads/master"
 
 echo "=== 推送完成 ==="
 
