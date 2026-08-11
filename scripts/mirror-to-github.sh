@@ -30,6 +30,12 @@ if [[ -z "$TAG" ]]; then
 fi
 echo "=== 检测到 tag: $TAG ==="
 
+# 验证 tag 格式（以 v 开头），非版本 tag 则跳过（可能是分支推送触发流水线）
+if [[ ! "$TAG" =~ ^v ]]; then
+    echo "跳过: '$TAG' 不是版本 tag（应以 v 开头），可能是分支推送触发，无需镜像"
+    exit 0
+fi
+
 # CI 环境：使用 Token 认证
 if [[ -n "${GITHUB_TOKEN:-}" ]]; then
     GITHUB_REMOTE="https://${GITHUB_TOKEN}@github.com/cdmiltd/hivemind-simulator.git"
