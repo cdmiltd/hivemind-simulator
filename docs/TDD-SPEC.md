@@ -2098,6 +2098,170 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **那么**：点击「下载 HTML 报告」触发浏览器下载对应地址的 HTML 报告
 - **核实依据**：用户约定"在模拟器和监控器共同的日志区域增加报告下载按钮"
 
+### 2.23 Pilot to Cloud
+
+> Pilot to Cloud 是 DJI Cloud API 的另一种设备接入方式，网关设备为遥控器（DJI RC Plus / RC Plus 2 / RC Pro 行业版），通过 JSBridge + MQTT 接入云平台。
+> 与 Dock to Cloud（机场上云）共享 MQTT Topic 结构和消息格式，但在接入方式、注册流程、航线管理等方面存在差异。
+> 参考文档：[Pilot 上云功能介绍](https://developer.dji.com/doc/cloud-api-tutorial/cn/feature-set/pilot-feature-set/pilot-access-to-cloud.html)
+
+#### TC-PILOT-001：Dock/Pilot 模式切换
+- **给定**：模拟器运行中，当前为 Dock 模式
+- **当**：用户在前端切换到 Pilot 模式
+- **那么**：设备类型选择从「机场+飞行器」变为「遥控器+飞行器」
+- **那么**：注册流程简化为 MQTT 连接 + update_topo（无 config/bind/org 流程）
+- **那么**：设备控制面板调整（无机场控制，新增云控授权等）
+- **核实依据**：Pilot 通过 JSBridge 接入，注册流程与 Dock 不同；模拟器跳过 JSBridge，直接从 MQTT 连接开始模拟
+
+#### TC-PILOT-002：模式切换时断开旧连接
+- **给定**：Dock 模式下设备已在线
+- **当**：用户切换到 Pilot 模式
+- **那么**：先断开当前 MQTT 连接，下线旧设备
+- **那么**：清空旧设备状态，再允许 Pilot 模式注册
+- **错误后果**：不断开就切换会导致两个设备同时在线，平台状态混乱
+
+#### TC-PILOT-003：遥控器类型枚举（domain=2）
+- **给定**：DeviceType 枚举
+- **当**：查找遥控器类型
+- **那么**：DJI RC Plus 的 domain=2, type=119, sub_type=0
+- **那么**：DJI RC Plus 2 的 domain=2, type=174, sub_type=0
+- **那么**：DJI RC Pro 行业版的 domain=2, type=144, sub_type=0
+- **核实依据**：[DJI 产品支持-飞行器/遥控器/机场枚举值](https://developer.dji.com/doc/cloud-api-tutorial/cn/overview/product-support.html)
+- **错误后果**：domain 值错误会导致平台无法识别设备类型
+
+#### TC-PILOT-004：遥控器与飞行器兼容性
+- **给定**：用户选择遥控器类型
+- **当**：查找兼容的飞行器
+- **那么**：RC Plus (119) 兼容 M350 RTK / M300 RTK / M30 / M30T
+- **那么**：RC Plus 2 (174) 兼容 M4E / M4T
+- **那么**：RC Pro (144) 兼容 Mavic 3E / Mavic 3T
+- **核实依据**：[DJI 产品支持-机型支持表](https://developer.dji.com/doc/cloud-api-tutorial/cn/overview/product-support.html)
+
+#### TC-PILOT-005：Pilot 模式跳过注册流程
+- **给定**：Pilot 模式下，用户点击「注册到第三方平台」
+- **当**：MQTT 连接成功
+- **那么**：不执行 config/airport_bind_status/airport_organization_get/airport_organization_bind
+- **那么**：直接发送 update_topo 上线
+- **核实依据**：Pilot 通过 JSBridge + HTTPS 完成设备绑定，不通过 MQTT 注册流程；模拟器跳过 JSBridge，直接从 MQTT 连接开始模拟
+- **错误后果**：执行 Dock 注册流程会导致平台拒绝（Pilot 设备不支持 airport_organization_bind）
+
+#### TC-PILOT-006：update_topo 中 type 为遥控器类型值
+- **给定**：Pilot 模式下，遥控器类型为 RC Plus 2 (type=174)
+- **当**：发送 update_topo
+- **那么**：data.type = 174（遥控器 type 值）
+- **那么**：data.sub_type = 0
+- **那么**：sub_devices 包含飞行器信息（sn, domain=0, type=飞行器类型, sub_type, index="A"）
+- **核实依据**：[DJI 设备管理-update_topo](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/properties.html)
+- **错误后果**：type 值错误会导致平台将设备识别为非遥控器
+
+#### TC-PILOT-007：Pilot 模式上线后上报 live_capacity
+- **给定**：Pilot 模式下，update_topo 成功
+- **当**：设备上线
+- **那么**：通过 State Topic（`thing/product/{gateway_sn}/state`）上报 live_capacity
+- **那么**：live_capacity 包含 available_video_number、coexist_video_number_max、device_list
+- **核实依据**：[DJI Pilot 直播功能-直播能力更新](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/live.html)，pushMode=1，通过 state Topic 上报
+
+#### TC-PILOT-008：遥控器 OSD 字段集
+- **给定**：Pilot 模式下，设备已上线
+- **当**：0.5Hz 定频上报遥控器 OSD
+- **那么**：OSD 包含以下字段（pushMode=0）：
+  - `capacity_percent`（遥控器剩余电量，0-100）
+  - `latitude` / `longitude`（遥控器位置）
+  - `height`（椭球高度）
+  - `wireless_link`（图传链路：4g_link_state, sdr_link_state, sdr_quality, 4g_quality 等）
+  - `drc_state`（DRC 链路状态：0=未连接, 1=连接中, 2=已连接）
+- **那么**：Topic 为 `thing/product/{gateway_sn}/osd`
+- **核实依据**：[DJI RC Plus 2 设备属性](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/properties.html)
+
+#### TC-PILOT-009：飞行器 OSD 复用 Dock 飞行器字段集
+- **给定**：Pilot 模式下，飞行器已激活
+- **当**：0.5Hz 定频上报飞行器 OSD
+- **那么**：飞行器 OSD 字段与 Dock 飞行器一致（mode_code, horizontal_speed, battery, position_state 等）
+- **那么**：Topic 为 `thing/product/{drone_sn}/osd`
+- **核实依据**：[DJI 飞行器设备属性](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/aircraft/properties.html)，Pilot 飞行器与 Dock 飞行器共享相同的 OSD 字段集
+
+#### TC-PILOT-010：遥控器 OSD 与飞行器 OSD 独立上报
+- **给定**：Pilot 模式下，设备已上线，飞行器已激活
+- **当**：OSD 定频上报周期触发
+- **那么**：遥控器 OSD 发送到 `thing/product/{gateway_sn}/osd`
+- **那么**：飞行器 OSD 发送到 `thing/product/{drone_sn}/osd`
+- **那么**：两条消息独立发送，使用各自的 SN 作为 Topic 标识
+- **核实依据**：DJI Topic 规范中 OSD Topic 使用 device_sn（物模型属性所属设备的 SN）
+
+#### TC-PILOT-011：直播开始/停止/清晰度（MQTT Service）
+- **给定**：Pilot 模式下，设备已上线
+- **当**：平台下发 `live_start_push` / `live_stop_push` / `live_set_quality`
+- **那么**：通过 Service Topic（`thing/product/{gateway_sn}/services`）接收
+- **那么**：通过 services_reply 回复
+- **那么**：与 Dock 直播协议一致（url_type, url, video_id, video_quality）
+- **核实依据**：[DJI Pilot 直播功能](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/live.html)
+
+#### TC-PILOT-012：直播镜头切换走 DRC Topic
+- **给定**：Pilot 模式下，直播中
+- **当**：平台下发镜头切换指令 `drc_live_lens_change`
+- **那么**：通过 DRC Topic（`thing/product/{gateway_sn}/drc/down`）接收，不通过 Service Topic
+- **那么**：消息包含 `payload_index`（相机枚举值）和 `video_type`（thermal/wide/zoom）
+- **那么**：通过 DRC Topic（`thing/product/{gateway_sn}/drc/up`）回复
+- **核实依据**：[DJI Pilot 直播功能-镜头切换](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/live.html)，镜头切换通过 DRC Topic 而非 Service Topic
+- **错误后果**：在 Service Topic 等待镜头切换指令会收不到消息
+
+#### TC-PILOT-013：云控授权流程
+- **给定**：Pilot 模式下，设备已上线
+- **当**：平台下发 `cloud_control_auth_request`（Service Topic）
+- **那么**：模拟器自动同意授权（模拟用户在遥控器上点击同意）
+- **那么**：通过 services_reply 回复 result=0
+- **那么**：通过 events Topic 上报 `cloud_control_auth_notify`（status=ok）
+- **那么**：通过 State Topic 上报 `cloud_control_auth` 授权列表
+- **核实依据**：[DJI Pilot DRC-云控授权](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/drc.html)，Pilot 特有流程，Dock 不需要
+- **错误后果**：不实现授权流程会导致平台无法获取控制权
+
+#### TC-PILOT-014：云控授权释放
+- **给定**：Pilot 模式下，云控已授权
+- **当**：平台下发 `cloud_control_release`（Service Topic）
+- **那么**：通过 services_reply 回复 result=0
+- **那么**：更新 `cloud_control_auth` 状态为未授权
+- **核实依据**：[DJI Pilot DRC-释放授权](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/drc.html)
+
+#### TC-PILOT-015：fly_to_point 指令处理
+- **给定**：Pilot 模式下，云控已授权，DRC 模式已进入
+- **当**：平台下发 `fly_to_point`（Service Topic）
+- **那么**：通过 services_reply 回复 result=0
+- **那么**：通过 events Topic 上报 `fly_to_point_progress`（含 planned_path_points, remaining_distance, remaining_time）
+- **核实依据**：[DJI Pilot DRC-fly_to_point](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/drc.html)
+
+#### TC-PILOT-016：stick_control 杆量控制
+- **给定**：Pilot 模式下，DRC 模式已进入，飞行中
+- **当**：平台下发 `stick_control`（DRC Topic `drc/down`）
+- **那么**：通过 DRC Topic（`drc/up`）回复
+- **那么**：DRC 消息包含 `seq` 字段（递增序号）
+- **核实依据**：[DJI Pilot DRC-stick_control](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/drc.html)，DRC Topic 消息格式与 Service Topic 不同，包含 seq 字段
+
+#### TC-PILOT-017：Pilot 模式不模拟航线执行
+- **给定**：Pilot 模式下，设备已上线
+- **当**：平台下发航线任务
+- **那么**：模拟器不处理航线任务执行（Pilot 航线执行由 Pilot 2 本地控制）
+- **那么**：航线文件管理通过 HTTPS（模拟器不模拟 HTTPS API）
+- **核实依据**：[DJI Pilot 航线管理](https://developer.dji.com/doc/cloud-api-tutorial/cn/feature-set/pilot-feature-set/pilot-wayline-management.html)，Pilot 航线管理使用 HTTPS，航线执行由 Pilot 本地控制
+- **说明**：如果 hivemind 需要航线文件管理 HTTPS API，后续按需新增
+
+#### TC-PILOT-018：Pilot 模式不模拟媒体上传
+- **给定**：Pilot 模式下，设备已上线
+- **当**：飞行完成后
+- **那么**：模拟器不处理媒体上传（Pilot 媒体管理通过 HTTPS）
+- **核实依据**：[DJI Pilot 媒体管理](https://developer.dji.com/doc/cloud-api-tutorial/cn/feature-set/pilot-feature-set/pilot-media-management.html)，Pilot 媒体管理使用 HTTPS，不通过 MQTT
+
+#### TC-PILOT-019：Pilot 模式不支持 HMS 告警
+- **给定**：Pilot 模式下，设备已上线
+- **当**：模拟 HMS 告警
+- **那么**：Pilot 模式不模拟 HMS 告警（Dock 独有功能）
+- **核实依据**：[DJI Pilot 功能集](https://developer.dji.com/doc/cloud-api-tutorial/cn/feature-set/pilot-feature-set/pilot-access-to-cloud.html)，Pilot 不支持 HMS、远程调试、固件升级等 Dock 独有功能
+
+#### TC-PILOT-020：Pilot 模式 DRC 心跳
+- **给定**：Pilot 模式下，DRC 模式已进入
+- **当**：DRC 心跳周期触发
+- **那么**：通过 DRC Topic（`drc/up`）发送 `heart_beat` 消息
+- **那么**：消息包含 `timestamp` 和 `seq` 字段
+- **核实依据**：[DJI Pilot DRC-心跳](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/drc.html)，超过 1 分钟未收到心跳，设备退出 DRC 链路
+
 ## 3. 使用方式
 
 ### 新增功能时

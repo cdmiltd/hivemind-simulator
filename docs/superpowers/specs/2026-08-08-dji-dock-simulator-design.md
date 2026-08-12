@@ -781,3 +781,150 @@ mqtt.publish(dockOsdTopic, wrapOsd(selectDockBuilder().buildDockOsd(ctx)));
 ```
 
 `selectDockBuilder()` / `selectDroneBuilder()` 无参数，内部从 `runtimeConfig` 获取设备类型，通过 `supports(DeviceType)` 遍历匹配。`DeviceSimulator` 职责收敛为：调度（0.5Hz）+ 发布（MQTT）+ 包装（envelope），字段构造委托给 Builder。
+
+## 16. Pilot to Cloud 支持
+
+> 参考：[DJI Pilot 上云功能介绍](https://developer.dji.com/doc/cloud-api-tutorial/cn/feature-set/pilot-feature-set/pilot-access-to-cloud.html)
+
+### 16.1 架构概述
+
+Pilot to Cloud 是 DJI Cloud API 的另一种设备接入方式，网关设备为遥控器（DJI RC Plus / RC Plus 2 / RC Pro 行业版），通过 JSBridge + MQTT 接入云平台。
+
+模拟器通过新增 `DeviceMode` 枚举（DOCK / PILOT）实现模式切换，单实例运行，不支持同时运行两种模式。Pilot 模式下跳过 JSBridge 层，直接从 MQTT 连接开始模拟。
+
+### 16.2 与 Dock to Cloud 的差异
+
+| 维度 | Dock to Cloud | Pilot to Cloud |
+|---|---|---|
+| 网关设备 | 机场（domain=3, type=1/2/3） | 遥控器（domain=2, type=119/174/144） |
+| 接入方式 | MQTT 直连 + 设备绑定流程 | JSBridge + MQTT（模拟器跳过 JSBridge） |
+| 注册流程 | config → bind_status → org_get → org_bind → update_topo | MQTT 连接 → 直接 update_topo |
+| 航线管理 | MQTT（下发/执行/进度） | HTTPS（文件下载上传），执行由 Pilot 本地控制 |
+| 媒体管理 | MQTT（凭证/上传结果） | HTTPS |
+| 直播镜头切换 | Service Topic | DRC Topic（`drc/down`，method=`drc_live_lens_change`） |
+| DRC 授权 | `flight/payload_authority_grab` 抢夺控制权 | `cloud_control_auth_request` 请求遥控器授权 |
+| HMS 告警 | 支持 | 不支持 |
+| 远程调试 | 支持 | 不支持 |
+
+### 16.3 Pilot 模式注册时序
+
+```mermaid
+sequenceDiagram
+    participant 模拟器
+    participant EMQX
+    participant 第三方巡飞平台
+
+    模拟器->>EMQX: 建立 MQTT 连接
+    Note over 模拟器: Pilot 模式跳过 config/bind/org 注册流程
+    模拟器->>第三方巡飞平台: update_topo（type=遥控器, sub_devices=[飞行器]）
+    第三方巡飞平台-->>模拟器: status_reply
+    模拟器->>第三方巡飞平台: state 上报 live_capacity
+    Note over 模拟器: 设备上线，开始 OSD/State 上报
+```
+
+### 16.4 Pilot OSD 架构
+
+#### 遥控器 OSD（pushMode=0，定频 0.5Hz）
+
+Topic: `thing/product/{gateway_sn}/osd`
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `capacity_percent` | int | 遥控器剩余电量（0-100） |
+| `latitude` / `longitude` | double | 遥控器位置 |
+| `height` | double | 椭球高度 |
+| `wireless_link` | struct | 图传链路（4g_link_state, sdr_link_state, sdr_quality, 4g_quality 等） |
+| `drc_state` | enum_int | DRC 链路状态（0:未连接, 1:连接中, 2:已连接） |
+
+#### 遥控器 State（pushMode=1，事件性上报）
+
+Topic: `thing/product/{gateway_sn}/state`
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `live_capacity` | struct | 直播能力（上线时上报） |
+| `live_status` | array | 直播状态 |
+| `firmware_version` | text | 固件版本 |
+| `cloud_control_auth` | array | 云控授权列表 |
+
+#### 飞行器 OSD
+
+Pilot 飞行器与 Dock 飞行器共享相同的 OSD 字段集，复用现有 `DroneOsdBuilder` 策略。
+
+### 16.5 Pilot DRC 云控授权流程
+
+Pilot 特有流程，Dock 不需要：
+
+```mermaid
+sequenceDiagram
+    participant 平台
+    participant 模拟器
+
+    平台->>模拟器: cloud_control_auth_request（Service Topic）
+    模拟器-->>平台: services_reply（result=0，自动同意）
+    模拟器->>平台: cloud_control_auth_notify（events, status=ok）
+    模拟器->>平台: cloud_control_auth（state, 授权列表）
+    Note over 模拟器: 云控已授权，可接收 DRC 指令
+    平台->>模拟器: fly_to_point / stick_control（DRC/Service Topic）
+    平台->>模拟器: cloud_control_release（Service Topic）
+    模拟器-->>平台: services_reply（result=0）
+```
+
+### 16.6 协议覆盖对比
+
+| 功能 | Dock to Cloud | Pilot to Cloud | 模拟器实现 |
+|---|---|---|---|
+| 设备上线 | update_topo | update_topo | 复用（type 不同） |
+| OSD 上报 | Dock + Drone OSD | Controller + Drone OSD | 新增 ControllerOsdBuilder |
+| 直播 | Service Topic | Service Topic + DRC 镜头切换 | 复用 + 新增 DRC 处理 |
+| DRC 指令飞行 | MQTT | MQTT + 云控授权 | 复用 + 新增授权流程 |
+| 航线任务 | MQTT | HTTPS（本地执行） | 不模拟 |
+| 媒体上传 | MQTT | HTTPS | 不模拟 |
+| HMS 告警 | MQTT | 不支持 | 不模拟 |
+| 远程调试 | MQTT | 不支持 | 不模拟 |
+
+### 16.7 新增文件与修改文件
+
+#### 新增文件
+
+| 文件 | 职责 |
+|---|---|
+| `DeviceMode.java` | 设备模式枚举（DOCK/PILOT） |
+| `PilotOnlineService.java` | Pilot 上线流程（MQTT + update_topo） |
+| `PilotControllerOsdBuilder.java` | 遥控器 OSD 字段集 |
+| `CloudControlAuthHandler.java` | 云控授权流程 |
+
+#### 修改文件
+
+| 文件 | 改动 |
+|---|---|
+| `DeviceType.java` | 新增 3 个遥控器(domain=2) + 7 个 Pilot 飞行器 |
+| `DeviceSimulator.java` | 按模式选择 Builder |
+| `RuntimeConfig.java` | 新增 mode/controllerSn/controllerType |
+| `SimulatorController.java` | 新增 Pilot 模式 API |
+| `ServiceCommandHandler.java` | 适配 cloud_control_auth_request |
+| `DrcCommandHandler.java` | 适配 drc_live_lens_change |
+| `index.html` | 新增 Dock/Pilot 模式切换 |
+| `application.yml` | 新增 Pilot 默认配置 |
+
+### 16.8 设备类型枚举扩展
+
+新增遥控器类型（domain=2）：
+
+| 枚举 | domain | type | sub_type | 搭配飞行器 |
+|---|---|---|---|---|
+| RC_PLUS | 2 | 119 | 0 | M350 RTK / M300 RTK / M30 / M30T |
+| RC_PLUS_2 | 2 | 174 | 0 | M4E / M4T |
+| RC_PRO | 2 | 144 | 0 | Mavic 3E / Mavic 3T |
+
+新增 Pilot 飞行器类型（domain=0）：
+
+| 枚举 | type | sub_type | 说明 |
+|---|---|---|---|
+| M350_RTK | 89 | 0 | Matrice 350 RTK |
+| M300_RTK | 60 | 0 | Matrice 300 RTK |
+| MAVIC_3E | 77 | 0 | Mavic 3E |
+| MAVIC_3T | 77 | 1 | Mavic 3T |
+| M400 | 103 | 0 | Matrice 400 |
+| M4E | 99 | 0 | DJI Matrice 4E |
+| M4T | 99 | 1 | DJI Matrice 4T |
