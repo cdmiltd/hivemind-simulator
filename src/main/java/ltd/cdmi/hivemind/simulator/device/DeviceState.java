@@ -57,14 +57,18 @@ public class DeviceState {
     private volatile double dockHumidity = 50.0;
     /** 风速 (m/s) */
     private volatile double windSpeed = 3.0;
-    /** 风向 (°，0=北，顺时针) */
-    private volatile double windDirection = 0.0;
-    /** 降雨量 (mm) */
-    private volatile double rainfall = 0.0;
+    /** 风向：1=正北,2=东北,3=东,4=东南,5=南,6=西南,7=西,8=西北 */
+    private volatile int windDirection = 1;
+    /** 降雨等级：0=无雨,1=小雨,2=中雨,3=大雨 */
+    private volatile int rainfall = 0;
     /** 备用电池温度 (°C) */
     private volatile double backupBatteryTemperature = 25.0;
     /** 机场静音模式：0=非静音, 1=静音（三版共有，accessMode=rw，可通过 property/set 设置） */
     private volatile int silentMode = 0;
+    /** 空中回传：false=关闭, true=开启（Dock2/Dock3 共有，accessMode=rw，可通过 property/set 设置） */
+    private volatile boolean airTransferEnable = true;
+    /** 用户体验改善计划：0=初始, 1=拒绝, 2=同意（Dock2/Dock3 共有，accessMode=rw，可通过 property/set 设置） */
+    private volatile int userExperienceImprovement = 0;
 
     // ==================== 无人机 (M4D) 状态 ====================
 
@@ -179,6 +183,11 @@ public class DeviceState {
     /** DRC 状态：0=空闲, 1=连接中, 2=已连接, 3=断开中 */
     private volatile int drcState = 0;
 
+    // ==================== Pilot 模式遥控器状态 ====================
+
+    /** 遥控器剩余电量 (%) — Pilot 模式专用 */
+    private volatile int controllerCapacity = 100;
+
     // ===== 指令飞行任务（drc.html，fly_to_point / takeoff_to_point）=====
     /** 当前 fly_to_point 任务 ID */
     private volatile String currentFlyToId;
@@ -194,6 +203,28 @@ public class DeviceState {
     private volatile double targetHeight;
     /** 最大飞行速度（m/s） */
     private volatile int maxSpeed;
+    /** 安全起飞高度（相对起飞点 ALT，m），takeoff_to_point 专用：飞行器先升到此高度再水平飞行 */
+    private volatile double securityTakeoffHeight;
+    /** 返航高度（相对起飞点 ALT，m） */
+    private volatile int rthAltitude;
+    /** 返航模式（0=智能高度, 1=设定高度），Dock3 特有 */
+    private volatile int rthMode;
+    /** 遥控器失控动作（0=悬停, 1=着陆, 2=返航） */
+    private volatile int rcLostAction;
+    /** 指点飞行失控动作（0=继续执行, 1=退出执行普通失控行为） */
+    private volatile int commanderModeLostAction;
+    /** 指点飞行模式（0=智能高度飞行, 1=设定高度飞行），Dock3 特有 */
+    private volatile int commanderFlightMode;
+    /** 指点飞行高度（相对起飞点 ALT，m） */
+    private volatile double commanderFlightHeight;
+    /** 飞行安全预检查（0=关闭, 1=开启），Dock3 特有 */
+    private volatile int flightSafetyAdvanceCheck;
+    /** 是否开启模拟器任务（0=不开启, 1=开启） */
+    private volatile int simulateMissionEnable;
+    /** 模拟任务纬度 */
+    private volatile double simulateMissionLatitude;
+    /** 模拟任务经度 */
+    private volatile double simulateMissionLongitude;
 
     /** 飞行累计时长 (秒) */
     private volatile long flightTimeSeconds = 0;

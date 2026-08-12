@@ -21,6 +21,7 @@ import jakarta.annotation.PostConstruct;
 import ltd.cdmi.hivemind.simulator.config.RuntimeConfig;
 import ltd.cdmi.hivemind.simulator.config.SimulatorProperties;
 import ltd.cdmi.hivemind.simulator.device.DeviceState;
+import ltd.cdmi.hivemind.simulator.device.DeviceType;
 import ltd.cdmi.hivemind.simulator.diagnostic.CoverageRecorder;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticCode;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
@@ -86,6 +87,9 @@ public class DrcCommandHandler {
 
         // 注册 Phase 2 飞行安全指令
         registerSafetyHandlers();
+
+        // 注册 DRC 飞行控制指令（stick_control/drone_control，无回包机制）
+        registerFlightControlHandlers();
 
         // 注册 Phase 3 相机高级控制指令
         registerCameraAdvancedHandlers();
@@ -263,6 +267,55 @@ public class DrcCommandHandler {
         });
     }
 
+    /**
+     * 注册 DRC 飞行控制指令处理器。
+     * <p>DJI 文档明确：
+     * <ul>
+     *   <li>stick_control（杆量控制）：无回包机制，发送频率需保持 5-10hz</li>
+     *   <li>drone_control（飞行控制，已废弃）：成功不回包，仅异常时回包 result=非0</li>
+     * </ul>
+     * 模拟器默认模拟成功，两个指令均不回包（返回 null）。</p>
+     */
+    private void registerFlightControlHandlers() {
+        // stick_control：DRC-杆量控制（无回包机制）
+        registerHandler("stick_control", data -> {
+            int roll = data.path("roll").asInt();
+            int pitch = data.path("pitch").asInt();
+            int throttle = data.path("throttle").asInt();
+            int yaw = data.path("yaw").asInt();
+            log.info("DRC 杆量控制: roll={}, pitch={}, throttle={}, yaw={}", roll, pitch, throttle, yaw);
+            return null;  // 无回包机制
+        });
+
+        // drone_control：DRC-飞行控制（Dock1 有效，Dock2/Dock3 已废弃）
+        registerHandler("drone_control", data -> {
+            if (runtimeConfig.getDockType() == DeviceType.DOCK1) {
+                int seq = data.path("seq").asInt();
+                double x = data.path("x").asDouble();
+                double y = data.path("y").asDouble();
+                double h = data.path("h").asDouble();
+                double w = data.path("w").asDouble();
+                log.info("DRC 飞行控制: seq={}, x={}, y={}, h={}, w={}", seq, x, y, h, w);
+                return null;  // 成功不回包
+            }
+            log.warn("[P-9] 平台调用了废弃接口 drone_control（DRC-飞行控制），建议使用 stick_control 替代");
+            diagnosticRecorder.record(DiagnosticCode.PLATFORM_DEPRECATED_API_CALLED, "drone_control",
+                    "平台调用了废弃接口 drone_control，DJI 建议使用 stick_control 替代");
+            return null;  // 废弃接口，不回包
+        });
+
+        // heart_beat：DRC-心跳（回包回显 seq + timestamp，无 result 字段）
+        registerHandler("heart_beat", data -> {
+            int seq = data.path("seq").asInt();
+            long timestamp = data.path("timestamp").asLong();
+            log.info("DRC 心跳: seq={}, timestamp={}", seq, timestamp);
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("seq", seq);
+            result.put("timestamp", timestamp);
+            return result;
+        });
+    }
+
     /** 构造成功回复 */
     private Map<String, Object> success() {
         Map<String, Object> result = new LinkedHashMap<>();
@@ -306,7 +359,10 @@ public class DrcCommandHandler {
                 replyData = Map.of("result", 0);
             }
 
-            publishDrcReply(method, replyData, seq);
+            // replyData=null 表示该指令无回包机制（如 stick_control/drone_control 成功时不回包）
+            if (replyData != null) {
+                publishDrcReply(method, replyData, seq);
+            }
         } catch (Exception e) {
             DiagnosticCode code = ProtocolValidator.classifyException(e);
             log.error("{} 处理 DRC 消息失败: {}", ProtocolValidator.logPrefix(code), e.getMessage(), e);

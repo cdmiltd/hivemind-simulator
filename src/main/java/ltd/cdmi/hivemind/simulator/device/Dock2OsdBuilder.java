@@ -39,10 +39,13 @@ public class Dock2OsdBuilder extends AbstractDockOsdBuilder {
     }
 
     @Override
-    protected void appendDockSpecific(OsdContext ctx, Map<String, Object> data) {
+    protected void appendDockSpecific(OsdContext ctx,
+                                        Map<String, Object> powerAndBattery,
+                                        Map<String, Object> taskAndLink,
+                                        Map<String, Object> positionAndEnv) {
         OsdStrategy s = ctx.getStrategy();
         // Dock2 特有字段（Dock1 无此字段）
-        data.put(s.convertKey("home_position_is_valid"), 1); // Home 点有效
-        data.put(s.convertKey("heading"), 0.0);              // 机场朝向角
+        positionAndEnv.put(s.convertKey("home_position_is_valid"), 1); // Home 点有效
+        positionAndEnv.put(s.convertKey("heading"), 0.0);              // 机场朝向角
     }
 }

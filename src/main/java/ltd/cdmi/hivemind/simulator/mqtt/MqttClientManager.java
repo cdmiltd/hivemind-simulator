@@ -36,8 +36,11 @@ import org.springframework.stereotype.Component;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Deque;
+import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -66,7 +69,10 @@ public class MqttClientManager implements MqttCallbackExtended {
 
     /** 消息日志缓冲默认大小（当配置未指定时使用） */
     private static final int DEFAULT_MAX_LOG_SIZE = 2000;
-    private final List<Map<String, Object>> messageLogs = Collections.synchronizedList(new ArrayList<>());
+    /** getLogs 返回的最大条数（仅返回最新 N 条，减少前端渲染压力） */
+    private static final int MAX_RETURN_LOG_SIZE = 500;
+    // 使用 ArrayDeque 而非 ArrayList：pollFirst() 是 O(1)，避免 ArrayList.remove(0) 的 O(n) 元素移动
+    private final Deque<Map<String, Object>> messageLogs = new ArrayDeque<>();
 
     public MqttClientManager(MqttProperties mqttProps, SimulatorProperties props, ObjectMapper objectMapper, RuntimeConfig runtimeConfig) {
         this.mqttProps = mqttProps;
@@ -327,18 +333,29 @@ public class MqttClientManager implements MqttCallbackExtended {
         entry.put("payload", payload);
         synchronized (messageLogs) {
             if (messageLogs.size() >= getMaxLogSize()) {
-                messageLogs.remove(0);
+                messageLogs.pollFirst();  // O(1)，替代 ArrayList.remove(0) 的 O(n)
             }
-            messageLogs.add(entry);
+            messageLogs.addLast(entry);
         }
     }
 
     /**
      * 获取消息日志列表（供 Web 控制台查询）。
+     * 仅返回最新 MAX_RETURN_LOG_SIZE 条，减少前端渲染压力。
      */
     public List<Map<String, Object>> getLogs() {
         synchronized (messageLogs) {
-            return new ArrayList<>(messageLogs);
+            if (messageLogs.size() <= MAX_RETURN_LOG_SIZE) {
+                return new ArrayList<>(messageLogs);
+            }
+            // 从尾部倒序取最新 N 条，再反转为正序（旧→新）
+            Iterator<Map<String, Object>> it = ((ArrayDeque<Map<String, Object>>) messageLogs).descendingIterator();
+            List<Map<String, Object>> result = new ArrayList<>(MAX_RETURN_LOG_SIZE);
+            while (it.hasNext() && result.size() < MAX_RETURN_LOG_SIZE) {
+                result.add(it.next());
+            }
+            Collections.reverse(result);
+            return result;
         }
     }
 

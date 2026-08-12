@@ -164,6 +164,8 @@ public class HmsSimulator {
         envelope.put("bid", UUID.randomUUID().toString());
         envelope.put("tid", UUID.randomUUID().toString());
         envelope.put("timestamp", System.currentTimeMillis());
+        envelope.put("need_reply", 0);  // DJI events 信封必填：0=不需要答复（HMS 为单向通知）
+        envelope.put("gateway", runtimeConfig.getDockSn());  // DJI events 信封必填：网关设备 SN
         envelope.put("method", "hms");
         envelope.put("data", data);
 

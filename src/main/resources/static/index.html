@@ -422,13 +422,13 @@
     <!-- Title 栏 -->
     <div class="app-header">
         <div class="app-header-left">
-            <h1>DJI Dock 机场模拟器</h1>
+            <h1>{{ connConfig.device_mode === 'PILOT' ? 'DJI Pilot 飞行器模拟器' : 'DJI Dock 机场模拟器' }}</h1>
             <el-tag :type="mqttConnected ? 'success' : (mqttError ? 'danger' : 'info')" size="small" :effect="mqttConnected ? 'light' : 'plain'" :class="{'mqtt-blink': connecting}">MQTT: {{ mqttConnected ? '已连接' : (connecting ? '连接中' : '未连接') }}</el-tag>
             <el-tag :type="online ? 'success' : 'info'" size="small">设备: {{ online ? '在线' : '离线' }}</el-tag>
         </div>
         <div class="app-header-right">
             <el-button :type="powered ? 'danger' : 'success'" size="small" @click="powered ? doPowerOff() : doPowerOn()" :loading="connecting">{{ powered ? '关机' : '开机' }}</el-button>
-            <el-button size="small" @click="showDeviceInfoDialog = true">机场属性</el-button>
+            <el-button size="small" @click="showDeviceInfoDialog = true">{{ connConfig.device_mode === 'PILOT' ? '遥控器属性' : '机场属性' }}</el-button>
             <el-button type="primary" size="small" @click="showRegisterDialog = true" :disabled="!powered">注册到第三方平台</el-button>
             <el-button size="small" @click="showDiagnosticDialog = true">诊断日志</el-button>
             <el-button size="small" @click="openCoverageDialog">覆盖率报告</el-button>
@@ -473,37 +473,44 @@
             <!-- 状态模拟 -->
             <el-card class="right-card" header="状态模拟">
                 <el-form label-width="72px" size="small">
-                    <el-form-item label="电量(%)">
-                        <el-slider v-model="editState.batteryPercent" :min="0" :max="100" @change="saveState"></el-slider>
+                    <!-- Pilot 模式：遥控器电量 -->
+                    <el-form-item v-if="connConfig.device_mode === 'PILOT'" label="遥控电量">
+                        <el-slider v-model="editState.controllerCapacity" :min="0" :max="100" @change="saveState"></el-slider>
                     </el-form-item>
-                    <el-form-item label="温度(℃)">
-                        <el-input-number v-model="editState.dockTemperature" :precision="1" :step="0.5" size="small" @change="saveState"></el-input-number>
-                    </el-form-item>
-                    <el-form-item label="湿度(%)">
-                        <el-input-number v-model="editState.dockHumidity" :min="0" :max="100" :step="1" size="small" @change="saveState"></el-input-number>
-                    </el-form-item>
-                    <el-form-item label="风速(m/s)">
-                        <el-input-number v-model="editState.windSpeed" :min="0" :step="0.5" size="small" @change="saveState"></el-input-number>
-                    </el-form-item>
-                    <el-form-item label="舱盖">
-                        <el-switch v-model="editState.coverOpen" @change="saveState"></el-switch>
-                    </el-form-item>
-                    <el-form-item label="飞行器">
-                        <el-switch v-model="editState.droneInDock" @change="saveState"></el-switch>
-                        <span style="margin-left: 4px; font-size: 12px; color: #909399;">{{ editState.droneInDock ? '在舱' : '不在舱' }}</span>
-                        <el-radio-group v-model="editState.droneActivated" size="small" :disabled="!editState.droneInDock" @change="saveState" style="margin-left: 12px;">
-                            <el-radio-button :value="false">休眠</el-radio-button>
-                            <el-radio-button :value="true">激活</el-radio-button>
-                        </el-radio-group>
-                    </el-form-item>
-                    <el-form-item v-if="connConfig.dock_type === 'DOCK1' || connConfig.dock_type === 'DOCK2'" label="静音模式">
-                        <el-switch v-model="editState.silentMode" :active-value="1" :inactive-value="0" @change="saveState"></el-switch>
-                    </el-form-item>
+                    <!-- Dock 模式：机场状态控制 -->
+                    <template v-else>
+                        <el-form-item label="电量(%)">
+                            <el-slider v-model="editState.batteryPercent" :min="0" :max="100" @change="saveState"></el-slider>
+                        </el-form-item>
+                        <el-form-item label="温度(℃)">
+                            <el-input-number v-model="editState.dockTemperature" :precision="1" :step="0.5" size="small" @change="saveState"></el-input-number>
+                        </el-form-item>
+                        <el-form-item label="湿度(%)">
+                            <el-input-number v-model="editState.dockHumidity" :min="0" :max="100" :step="1" size="small" @change="saveState"></el-input-number>
+                        </el-form-item>
+                        <el-form-item label="风速(m/s)">
+                            <el-input-number v-model="editState.windSpeed" :min="0" :step="0.5" size="small" @change="saveState"></el-input-number>
+                        </el-form-item>
+                        <el-form-item label="舱盖">
+                            <el-switch v-model="editState.coverOpen" @change="saveState"></el-switch>
+                        </el-form-item>
+                        <el-form-item label="飞行器">
+                            <el-switch v-model="editState.droneInDock" @change="saveState"></el-switch>
+                            <span style="margin-left: 4px; font-size: 12px; color: #909399;">{{ editState.droneInDock ? '在舱' : '不在舱' }}</span>
+                            <el-radio-group v-model="editState.droneActivated" size="small" :disabled="!editState.droneInDock" @change="saveState" style="margin-left: 12px;">
+                                <el-radio-button :value="false">休眠</el-radio-button>
+                                <el-radio-button :value="true">激活</el-radio-button>
+                            </el-radio-group>
+                        </el-form-item>
+                        <el-form-item v-if="connConfig.dock_type === 'DOCK1' || connConfig.dock_type === 'DOCK2'" label="静音模式">
+                            <el-switch v-model="editState.silentMode" :active-value="1" :inactive-value="0" @change="saveState"></el-switch>
+                        </el-form-item>
+                    </template>
                 </el-form>
             </el-card>
 
-            <!-- 异常模拟（HMS 告警上报） -->
-            <el-card class="right-card">
+            <!-- 异常模拟（HMS 告警上报）— Pilot 模式不支持 HMS -->
+            <el-card class="right-card" v-if="connConfig.device_mode === 'DOCK'">
                 <template #header>
                     <span>异常模拟</span>
                     <el-tag v-if="hmsReporting" type="warning" size="small" style="margin-left: 8px;">上报中</el-tag>
@@ -565,28 +572,35 @@
                 </div>
             </el-card>
 
-            <!-- 任务模拟 -->
-            <el-card class="right-card" header="任务模拟">
-                <el-descriptions :column="1" border size="small">
-                    <el-descriptions-item label="任务状态">
-                        <el-tag :type="task.active ? 'warning' : 'info'" size="small">
-                            {{ task.active ? (task.paused ? '暂停' : '执行中') : '空闲' }}
-                        </el-tag>
-                    </el-descriptions-item>
-                    <el-descriptions-item label="Flight ID">{{ task.flight_id || '-' }}</el-descriptions-item>
-                    <el-descriptions-item label="进度">{{ task.percent || 0 }}%</el-descriptions-item>
-                    <el-descriptions-item label="步骤">{{ task.current_step || '-' }} / 35</el-descriptions-item>
-                </el-descriptions>
-                <el-progress :percentage="task.percent || 0" :status="task.active ? undefined : 'success'" style="margin-top: 8px;"></el-progress>
-                <div style="margin-top: 8px;">
-                    <div style="font-size: 12px; color: #909399; margin-bottom: 4px;">媒体文件 ({{ media.length }})</div>
-                    <div v-for="f in media.slice(-5)" :key="f.name" style="font-size: 12px; color: #606266;">
-                        {{ f.name }} - {{ f.upload_time }}
+            <!-- 任务模拟 — Pilot 模式不支持航线任务和媒体上传（TC-PILOT-017/018） -->
+            <el-card class="right-card">
+                <template #header>任务模拟</template>
+                <template v-if="connConfig.device_mode === 'DOCK'">
+                    <el-descriptions :column="1" border size="small">
+                        <el-descriptions-item label="任务状态">
+                            <el-tag :type="task.active ? 'warning' : 'info'" size="small">
+                                {{ task.active ? (task.paused ? '暂停' : '执行中') : '空闲' }}
+                            </el-tag>
+                        </el-descriptions-item>
+                        <el-descriptions-item label="Flight ID">{{ task.flight_id || '-' }}</el-descriptions-item>
+                        <el-descriptions-item label="进度">{{ task.percent || 0 }}%</el-descriptions-item>
+                        <el-descriptions-item label="步骤">{{ task.current_step || '-' }} / 35</el-descriptions-item>
+                    </el-descriptions>
+                    <el-progress :percentage="task.percent || 0" :status="task.active ? undefined : 'success'" style="margin-top: 8px;"></el-progress>
+                    <div style="margin-top: 8px;">
+                        <div style="font-size: 12px; color: #909399; margin-bottom: 4px;">媒体文件 ({{ media.length }})</div>
+                        <div v-for="f in media.slice(-5)" :key="f.name" style="font-size: 12px; color: #606266;">
+                            {{ f.name }} - {{ f.upload_time }}
+                        </div>
                     </div>
+                </template>
+                <div v-else style="padding: 8px 0; font-size: 13px; color: #909399; line-height: 1.6;">
+                    Pilot 模式不模拟航线任务和媒体上传。<br>
+                    Pilot 航线执行与媒体管理通过 HTTPS，由 Pilot 2 本地控制。
                 </div>
             </el-card>
 
-            <!-- 位置模拟 -->
+            <!-- 位置模拟 — Dock: 机场位置(起飞点=返航点)；Pilot: 遥控器位置(=返航点 Home) -->
             <el-card class="right-card">
                 <template #header>
                     <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -643,10 +657,10 @@
                     </el-form>
                 </div>
                 <div style="font-size: 12px; color: #909399; margin-top: 4px;">
-                    机场位置作为起飞点与返航点，保存后重启依然有效。
+                    {{ connConfig.device_mode === 'PILOT' ? '遥控器位置作为飞行器返航点（Home 点），保存后重启依然有效。' : '机场位置作为起飞点与返航点，保存后重启依然有效。' }}
                 </div>
 
-                <!-- 无人机实时位置 -->
+                <!-- 无人机实时位置（Dock/Pilot 通用） -->
                 <div style="margin-top: 12px; padding-top: 10px; border-top: 1px dashed #e4e7ed;">
                     <div style="font-size: 13px; color: #303133; margin-bottom: 6px;">无人机位置</div>
                     <el-descriptions :column="1" border size="small">
@@ -655,6 +669,14 @@
                         <el-descriptions-item label="高度(m)">{{ dronePosition.activated ? dronePosition.height.toFixed(1) : '-' }}</el-descriptions-item>
                         <el-descriptions-item label="状态">{{ droneStatusLabel }}</el-descriptions-item>
                     </el-descriptions>
+                    <div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
+                        <el-button size="small" type="warning" :disabled="!canTriggerRcLost" @click="triggerRcLost">模拟失联</el-button>
+                        <el-select size="small" v-model="dronePosition.rc_lost_action" style="width: 110px;" @change="saveRcLostAction">
+                            <el-option label="悬停" :value="0"></el-option>
+                            <el-option label="降落" :value="1"></el-option>
+                            <el-option label="返航" :value="2"></el-option>
+                        </el-select>
+                    </div>
                 </div>
             </el-card>
         </div>
@@ -663,29 +685,64 @@
     <!-- 注册到第三方平台 弹窗 -->
     <el-dialog v-model="showRegisterDialog" title="注册到第三方平台" width="460px">
         <el-form label-width="90px" size="small">
-            <el-form-item label="机场类型">
-                <el-select v-model="connConfig.dock_type" @change="onDockTypeChange" placeholder="选择机场类型" style="width: 100%;">
-                    <el-option v-for="o in dockTypeOptions" :key="o.value" :label="o.label" :value="o.value"></el-option>
-                </el-select>
+            <el-form-item label="接入模式">
+                <el-radio-group v-model="connConfig.device_mode" @change="onDeviceModeChange">
+                    <el-radio-button label="DOCK">机场上云</el-radio-button>
+                    <el-radio-button label="PILOT">飞行器上云</el-radio-button>
+                </el-radio-group>
             </el-form-item>
-            <el-form-item label="飞行器类型">
-                <el-select v-model="connConfig.drone_type" placeholder="选择飞行器类型" style="width: 100%;">
-                    <el-option v-for="o in droneTypeOptions" :key="o.value" :label="o.label" :value="o.value"></el-option>
-                </el-select>
+
+            <!-- Dock 模式：机场类型 + 飞行器类型 -->
+            <template v-if="connConfig.device_mode === 'DOCK'">
+                <el-form-item label="机场类型">
+                    <el-select v-model="connConfig.dock_type" @change="onDockTypeChange" placeholder="选择机场类型" style="width: 100%;">
+                        <el-option v-for="o in dockTypeOptions" :key="o.value" :label="o.label" :value="o.value"></el-option>
+                    </el-select>
+                </el-form-item>
+                <el-form-item label="飞行器类型">
+                    <el-select v-model="connConfig.drone_type" placeholder="选择飞行器类型" style="width: 100%;">
+                        <el-option v-for="o in droneTypeOptions" :key="o.value" :label="o.label" :value="o.value"></el-option>
+                    </el-select>
+                </el-form-item>
+            </template>
+
+            <!-- Pilot 模式：遥控器类型 + 飞行器类型 -->
+            <template v-else>
+                <el-form-item label="遥控器类型">
+                    <el-select v-model="connConfig.controller_type" @change="onControllerTypeChange" placeholder="选择遥控器类型" style="width: 100%;">
+                        <el-option v-for="o in controllerTypeOptions" :key="o.value" :label="o.label" :value="o.value"></el-option>
+                    </el-select>
+                </el-form-item>
+                <el-form-item label="飞行器类型">
+                    <el-select v-model="connConfig.drone_type" placeholder="选择飞行器类型" style="width: 100%;">
+                        <el-option v-for="o in pilotDroneTypeOptions" :key="o.value" :label="o.label" :value="o.value"></el-option>
+                    </el-select>
+                </el-form-item>
+            </template>
+
+            <!-- Dock 模式专属：License + 组织ID + 绑定码 -->
+            <template v-if="connConfig.device_mode === 'DOCK'">
+                <el-form-item v-if="!licenseLocked" label="DJI License">
+                    <el-input v-model="connConfig.app_license" placeholder="留空则不模拟 License 认证"></el-input>
+                    <div style="font-size: 12px; color: #909399; line-height: 1.4; margin-top: 4px;">不填写则后端跳过 License 校验，适用于调试阶段</div>
+                </el-form-item>
+                <el-form-item v-else label="DJI License">
+                    <el-tag type="success" size="small">已锁定（首次注册后无需再次输入）</el-tag>
+                </el-form-item>
+                <el-form-item label="组织ID">
+                    <el-input v-model="connConfig.organization_id" placeholder="如 default-org"></el-input>
+                </el-form-item>
+                <el-form-item label="绑定码">
+                    <el-input v-model="connConfig.device_binding_code" placeholder="设备绑定码"></el-input>
+                </el-form-item>
+            </template>
+
+            <!-- Pilot 模式提示：跳过注册流程 -->
+            <el-form-item v-else label="注册流程">
+                <el-tag type="info" size="small">Pilot 模式跳过注册，MQTT 连接后直接上线</el-tag>
             </el-form-item>
-            <el-form-item v-if="!licenseLocked" label="DJI License">
-                <el-input v-model="connConfig.app_license" placeholder="留空则不模拟 License 认证"></el-input>
-                <div style="font-size: 12px; color: #909399; line-height: 1.4; margin-top: 4px;">不填写则后端跳过 License 校验，适用于调试阶段</div>
-            </el-form-item>
-            <el-form-item v-else label="DJI License">
-                <el-tag type="success" size="small">已锁定（首次注册后无需再次输入）</el-tag>
-            </el-form-item>
-            <el-form-item label="组织ID">
-                <el-input v-model="connConfig.organization_id" placeholder="如 default-org"></el-input>
-            </el-form-item>
-            <el-form-item label="绑定码">
-                <el-input v-model="connConfig.device_binding_code" placeholder="设备绑定码"></el-input>
-            </el-form-item>
+
+            <!-- 公共字段：MQTT 配置 -->
             <el-form-item label="MQTT地址">
                 <el-input v-model="connConfig.mqtt_address" placeholder="如 127.0.0.1:1883"></el-input>
             </el-form-item>
@@ -702,13 +759,21 @@
         </template>
     </el-dialog>
 
-    <!-- 机场属性 弹窗 -->
-    <el-dialog v-model="showDeviceInfoDialog" title="机场属性" width="420px">
+    <!-- 设备属性 弹窗 -->
+    <el-dialog v-model="showDeviceInfoDialog" :title="connConfig.device_mode === 'PILOT' ? '遥控器属性' : '机场属性'" width="420px">
         <el-descriptions :column="1" border size="small">
-            <el-descriptions-item label="Dock SN">{{ deviceInfo.dockSn || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="Drone SN">{{ deviceInfo.droneSn || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="机场型号">{{ deviceInfo.dockModelKey ? dockModelName(deviceInfo.dockModelKey) + ' (' + deviceInfo.dockModelKey + ')' : '-' }}</el-descriptions-item>
-            <el-descriptions-item label="无人机型号">{{ deviceInfo.droneModelKey ? droneModelName(deviceInfo.droneModelKey) + ' (' + deviceInfo.droneModelKey + ')' : '-' }}</el-descriptions-item>
+            <template v-if="connConfig.device_mode === 'PILOT'">
+                <el-descriptions-item label="遥控器 SN">{{ deviceInfo.controllerSn || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="Drone SN">{{ deviceInfo.droneSn || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="遥控器型号">{{ deviceInfo.controllerModelKey || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="无人机型号">{{ deviceInfo.droneModelKey ? droneModelName(deviceInfo.droneModelKey) + ' (' + deviceInfo.droneModelKey + ')' : '-' }}</el-descriptions-item>
+            </template>
+            <template v-else>
+                <el-descriptions-item label="Dock SN">{{ deviceInfo.dockSn || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="Drone SN">{{ deviceInfo.droneSn || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="机场型号">{{ deviceInfo.dockModelKey ? dockModelName(deviceInfo.dockModelKey) + ' (' + deviceInfo.dockModelKey + ')' : '-' }}</el-descriptions-item>
+                <el-descriptions-item label="无人机型号">{{ deviceInfo.droneModelKey ? droneModelName(deviceInfo.droneModelKey) + ' (' + deviceInfo.droneModelKey + ')' : '-' }}</el-descriptions-item>
+            </template>
         </el-descriptions>
     </el-dialog>
 
@@ -719,7 +784,7 @@
                 <el-radio-button label="all">全部</el-radio-button>
                 <el-radio-button label="platform">P 类（平台）</el-radio-button>
                 <el-radio-button label="simulator">S 类（模拟器）</el-radio-button>
-                <el-radio-button label="monitor">M 类（监控器）</el-radio-button>
+                <el-radio-button label="monitor">M 类（待验证）</el-radio-button>
             </el-radio-group>
             <el-button size="small" @click="loadDiagnosticLogs">刷新</el-button>
         </div>
@@ -967,6 +1032,7 @@ createApp({
             droneInDock: true,
             droneActivated: false,
             silentMode: 0,
+            controllerCapacity: 100,  // Pilot 模式遥控器电量
         });
         const task = ref({});
         const streams = ref([]);
@@ -976,7 +1042,7 @@ createApp({
         // 机场位置（用户手动输入经纬度+高度，持久化到后端配置文件）
         const locationEdit = reactive({ latitude: 30.670815, longitude: 104.071523, height: 500.0 });
         // 无人机实时位置（飞行时由后端按步骤更新，前端轮询展示）
-        const dronePosition = reactive({ latitude: 0, longitude: 0, height: 0, mode_code: 0, in_dock: true, activated: false });
+        const dronePosition = reactive({ latitude: 0, longitude: 0, height: 0, mode_code: 0, in_dock: true, activated: false, rc_lost_action: 2 });
         // 高德地图：Key 存 localStorage，有效时显示地图，无效时回退手动输入
         const amapKey = ref(localStorage.getItem('amapKey') || '');
         const amapSecurityCode = ref(localStorage.getItem('amapSecurityCode') || '');
@@ -1016,6 +1082,7 @@ createApp({
         const installProgress = ref([]);      // winget 实时输出行
         const installElapsed = ref(0);        // 已等待秒数
         let installTimer = null;              // 计时器引用
+        let ffmpegEventSource = null;         // FFmpeg 安装 EventSource 引用（组件级，确保 onUnmounted 可关闭）
         const coverageHosts = ref([]);
         const coverageSelectedHost = ref('');
         const coverageData = ref(null);
@@ -1036,11 +1103,13 @@ createApp({
 
         // 平台连接配置
         const connConfig = reactive({
+            device_mode: 'DOCK',  // DOCK（机场上云） / PILOT（飞行器上云）
             organization_id: '',
             device_binding_code: '',
             app_license: '',
             dock_type: '',
             drone_type: '',
+            controller_type: '',  // Pilot 模式遥控器类型
             mqtt_address: '',
             mqtt_username: '',
             mqtt_password: '',
@@ -1067,6 +1136,46 @@ createApp({
             if (!compatible.some(o => o.value === connConfig.drone_type)) {
                 connConfig.drone_type = compatible.length ? compatible[0].value : '';
             }
+        }
+
+        // Pilot 模式遥控器类型选项
+        const controllerTypeOptions = [
+            { value: 'RC_PLUS',   label: 'DJI RC Plus'      },
+            { value: 'RC_PLUS_2', label: 'DJI RC Plus 2'    },
+            { value: 'RC_PRO',    label: 'RC Pro 行业版'     },
+        ];
+        // 遥控器 → 兼容飞行器 映射（与后端 DeviceType.isCompatiblePilot 一致）
+        const pilotDroneTypeOptionsMap = {
+            RC_PLUS:   [{ value: 'M350_RTK', label: 'M350 RTK' }, { value: 'M300_RTK', label: 'M300 RTK' }, { value: 'M30',  label: 'M30'  }, { value: 'M30T', label: 'M30T' }],
+            RC_PLUS_2: [{ value: 'M4E',      label: 'DJI M4E'   }, { value: 'M4T',      label: 'DJI M4T'   }],
+            RC_PRO:    [{ value: 'MAVIC_3E', label: 'Mavic 3E'  }, { value: 'MAVIC_3T', label: 'Mavic 3T' }],
+        };
+        // 当前遥控器类型下的飞行器选项（联动）
+        const pilotDroneTypeOptions = computed(() => pilotDroneTypeOptionsMap[connConfig.controller_type] || []);
+
+        // 遥控器类型切换时，若当前飞行器不兼容则自动切换到该遥控器的首个兼容飞行器
+        function onControllerTypeChange() {
+            const compatible = pilotDroneTypeOptionsMap[connConfig.controller_type] || [];
+            if (!compatible.some(o => o.value === connConfig.drone_type)) {
+                connConfig.drone_type = compatible.length ? compatible[0].value : '';
+            }
+        }
+
+        // 接入模式切换时，初始化对应模式的默认设备类型
+        function onDeviceModeChange() {
+            if (connConfig.device_mode === 'PILOT') {
+                if (!connConfig.controller_type) connConfig.controller_type = 'RC_PLUS';
+                onControllerTypeChange();
+            } else {
+                if (!connConfig.dock_type) connConfig.dock_type = 'DOCK3';
+                onDockTypeChange();
+            }
+            updateDocumentTitle();
+        }
+
+        // 浏览器标签页标题随模式切换（与标题栏保持一致）
+        function updateDocumentTitle() {
+            document.title = connConfig.device_mode === 'PILOT' ? 'DJI Pilot 飞行器模拟器' : 'DJI Dock 机场模拟器';
         }
 
         // 指令通讯窗口
@@ -1117,6 +1226,7 @@ createApp({
                 const saved = localStorage.getItem('simulator_connConfig');
                 if (saved) Object.assign(connConfig, JSON.parse(saved));
             } catch (e) {}
+            updateDocumentTitle();
         }
 
         async function fetchJSON(url, options) {
@@ -1151,6 +1261,7 @@ createApp({
                 editState.droneInDock = data.droneInDock;
                 editState.droneActivated = data.droneActivated ?? false;
                 editState.silentMode = data.silentMode ?? 0;
+                editState.controllerCapacity = data.controllerCapacity ?? 100;
             }
         }
 
@@ -1215,9 +1326,9 @@ createApp({
             // 启动计时器
             installTimer = setInterval(() => { installElapsed.value++; }, 1000);
 
-            const es = new EventSource('/api/live/install-ffmpeg-stream');
+            ffmpegEventSource = new EventSource('/api/live/install-ffmpeg-stream');
 
-            es.addEventListener('progress', (e) => {
+            ffmpegEventSource.addEventListener('progress', (e) => {
                 installProgress.value.push(e.data);
                 // 限制保留行数，避免内存膨胀
                 if (installProgress.value.length > 200) {
@@ -1230,9 +1341,11 @@ createApp({
                 });
             });
 
-            es.addEventListener('done', (e) => {
-                es.close();
+            ffmpegEventSource.addEventListener('done', (e) => {
+                ffmpegEventSource.close();
+                ffmpegEventSource = null;
                 clearInterval(installTimer);
+                installTimer = null;
                 installingFfmpeg.value = false;
                 try {
                     const data = JSON.parse(e.data);
@@ -1262,11 +1375,15 @@ createApp({
                 }
             });
 
-            es.addEventListener('error', () => {
-                // EventSource error 在连接异常断开时触发（done 事件已处理则 es.readyState=CLOSED）
-                if (es.readyState === EventSource.CLOSED) return;
-                es.close();
+            ffmpegEventSource.addEventListener('error', () => {
+                // EventSource error 在连接异常断开时触发（done 事件已处理则 readyState=CLOSED）
+                if (ffmpegEventSource && ffmpegEventSource.readyState === EventSource.CLOSED) return;
+                if (ffmpegEventSource) {
+                    ffmpegEventSource.close();
+                    ffmpegEventSource = null;
+                }
                 clearInterval(installTimer);
+                installTimer = null;
                 installingFfmpeg.value = false;
                 liveConfigSaveResult.value = { type: 'error', message: '安装连接异常，请重试' };
             });
@@ -1298,7 +1415,8 @@ createApp({
 
         async function refreshLogs() {
             const data = await fetchJSON('/api/logs') || [];
-            logs.value = data;
+            // 防御：限制 logs 数组最大长度，避免后端配置变更或异常导致前端渲染过多 DOM
+            logs.value = data.length > 500 ? data.slice(-500) : data;
             if (autoScroll.value) {
                 await nextTick();
                 scrollToBottom();
@@ -1308,13 +1426,16 @@ createApp({
         async function refreshConfig() {
             const data = await fetchJSON('/api/config');
             if (data) {
+                if (data.device_mode) connConfig.device_mode = data.device_mode;
                 if (!connConfig.organization_id) connConfig.organization_id = data.organization_id || '';
                 if (!connConfig.device_binding_code) connConfig.device_binding_code = data.device_binding_code || '';
                 if (!connConfig.app_license) connConfig.app_license = data.app_license || '';
                 if (!connConfig.dock_type) connConfig.dock_type = data.dock_type || '';
                 if (!connConfig.drone_type) connConfig.drone_type = data.drone_type || '';
+                if (!connConfig.controller_type) connConfig.controller_type = data.controller_type || '';
                 if (!connConfig.mqtt_address) connConfig.mqtt_address = (data.mqtt_host || '') + ':' + (data.mqtt_port || 1883);
                 if (!connConfig.mqtt_username) connConfig.mqtt_username = data.mqtt_username || '';
+                updateDocumentTitle();
             }
         }
 
@@ -1454,11 +1575,13 @@ createApp({
                 logs.value = [];
             }
             const body = {
+                device_mode: connConfig.device_mode,
                 organization_id: connConfig.organization_id,
                 device_binding_code: connConfig.device_binding_code,
                 app_license: licenseToUse,
                 dock_type: connConfig.dock_type,
                 drone_type: connConfig.drone_type,
+                controller_type: connConfig.controller_type,
                 mqtt_host: host,
                 mqtt_port: port,
                 mqtt_username: connConfig.mqtt_username,
@@ -1922,6 +2045,7 @@ createApp({
                 dronePosition.mode_code = data.mode_code;
                 dronePosition.in_dock = data.in_dock;
                 dronePosition.activated = data.activated;
+                dronePosition.rc_lost_action = data.rc_lost_action;
                 updateDroneMarker();
             }
         }
@@ -1932,6 +2056,27 @@ createApp({
                               5: '航线飞行', 9: '自动返航', 10: '自动降落', 13: '返航降落' };
             return labels[dronePosition.mode_code] || '未知';
         });
+        // rc_lost_action 选择器
+        async function saveRcLostAction() {
+            const res = await fetchJSON('/api/drone/rc-lost-action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rc_lost_action: dronePosition.rc_lost_action })
+            });
+            if (res && res.success === false) {
+                ElMessage.error(res.message || '设置 rc_lost_action 失败');
+            }
+        }
+        // 模拟失联按钮可用条件：MQTT 已连接 + 无人机已激活且在飞行中（不在舱内）
+        const canTriggerRcLost = computed(() =>
+            mqttConnected.value && dronePosition.activated && !dronePosition.in_dock
+        );
+        async function triggerRcLost() {
+            const res = await fetchJSON('/api/flight/trigger-rc-lost', { method: 'POST' });
+            if (res && res.success === false) {
+                ElMessage.error(res.message || '触发失联失败');
+            }
+        }
 
         async function clearLogs() {
             await fetchJSON('/api/logs', { method: 'DELETE' });
@@ -2001,6 +2146,15 @@ createApp({
 
         onUnmounted(() => {
             if (pollTimer) clearInterval(pollTimer);
+            // 防御：组件卸载时清理 FFmpeg 安装相关的资源，避免定时器和 EventSource 泄漏
+            if (installTimer) {
+                clearInterval(installTimer);
+                installTimer = null;
+            }
+            if (ffmpegEventSource) {
+                ffmpegEventSource.close();
+                ffmpegEventSource = null;
+            }
         });
 
         return { mqttConnected, online, powered, mqttError, state, editState, task, streams, media, logs,
@@ -2013,6 +2167,7 @@ createApp({
                  doRegister, doPowerOn, doPowerOff, saveState, clearLogs,
                  dockModelName, droneModelName,
                  dockTypeOptions, droneTypeOptions, onDockTypeChange,
+                 controllerTypeOptions, pilotDroneTypeOptions, onControllerTypeChange, onDeviceModeChange,
                  showDiagnosticDialog, diagnosticLogs, diagnosticFilter, filteredDiagnosticLogs, loadDiagnosticLogs,
                  showCoverageDialog, coverageHosts, coverageSelectedHost, coverageData, coverageRateText,
                  openCoverageDialog, loadCoverageHosts, loadCoverageData, downloadCoverageReport,
@@ -2020,7 +2175,7 @@ createApp({
                  showLiveConfigDialog, liveConfigEdit, liveConfigSaveResult, installingFfmpeg,
                  installProgress, installElapsed,
                  openLiveConfigDialog, saveLiveConfig, installFfmpeg,
-                 locationEdit, dronePosition, droneStatusLabel, saveLocation,
+                 locationEdit, dronePosition, droneStatusLabel, canTriggerRcLost, triggerRcLost, saveRcLostAction, saveLocation,
                  amapKey, amapSecurityCode, mapMode, amapKeyApplied,
                  showAmapConfigDialog, saveAmapKey, clearAmapKey, onMapModeChange,
                  selectingAirport, startSelectAirport, cancelSelectAirport,

@@ -59,7 +59,7 @@ class RemoteDebugSimulatorTest {
     private RemoteDebugSimulator createSimulator(DeviceType dockType, DeviceState state, MqttClientManager mqtt) {
         RuntimeConfig runtimeConfig = new RuntimeConfig(testMqttProps(), testProps(), new LiveConfigStore());
         runtimeConfig.setDockType(dockType);
-        return new RemoteDebugSimulator(testProps(), mqtt, state, runtimeConfig);
+        return new RemoteDebugSimulator(mqtt, state, runtimeConfig);
     }
 
     // ==================== Dock1 putter_open ====================

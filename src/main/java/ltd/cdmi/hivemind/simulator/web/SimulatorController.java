@@ -17,9 +17,11 @@ package ltd.cdmi.hivemind.simulator.web;
 
 import ltd.cdmi.hivemind.simulator.config.RuntimeConfig;
 import ltd.cdmi.hivemind.simulator.config.SimulatorProperties;
+import ltd.cdmi.hivemind.simulator.device.DeviceMode;
 import ltd.cdmi.hivemind.simulator.device.DeviceState;
 import ltd.cdmi.hivemind.simulator.device.DeviceType;
 import ltd.cdmi.hivemind.simulator.device.DockOnlineService;
+import ltd.cdmi.hivemind.simulator.device.PilotOnlineService;
 import ltd.cdmi.hivemind.simulator.diagnostic.CoverageRecorder;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticCode;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
@@ -50,6 +52,7 @@ import java.util.Map;
 public class SimulatorController {
 
     private final DockOnlineService onlineService;
+    private final PilotOnlineService pilotOnlineService;
     private final DeviceState state;
     private final MqttClientManager mqtt;
     private final WaylineTaskSimulator waylineSimulator;
@@ -64,7 +67,8 @@ public class SimulatorController {
     private final DiagnosticLogRecorder diagnosticRecorder;
     private final CoverageRecorder coverageRecorder;
 
-    public SimulatorController(DockOnlineService onlineService, DeviceState state,
+    public SimulatorController(DockOnlineService onlineService, PilotOnlineService pilotOnlineService,
+                               DeviceState state,
                                MqttClientManager mqtt, WaylineTaskSimulator waylineSimulator,
                                LiveStreamSimulator liveSimulator, MediaUploadSimulator mediaSimulator,
                                HmsSimulator hmsSimulator, FlightCommandSimulator flightCommandSimulator,
@@ -73,6 +77,7 @@ public class SimulatorController {
                                DiagnosticLogRecorder diagnosticRecorder,
                                CoverageRecorder coverageRecorder) {
         this.onlineService = onlineService;
+        this.pilotOnlineService = pilotOnlineService;
         this.state = state;
         this.mqtt = mqtt;
         this.waylineSimulator = waylineSimulator;
@@ -90,13 +95,23 @@ public class SimulatorController {
 
     // ==================== 设备控制 ====================
 
-    /** 设备上线（支持 skip_register 跳过注册，用于已注册设备的开机自动重连） */
+    /**
+     * 设备上线。
+     * <p>Dock 模式：支持 skip_register 跳过注册（用于已注册设备的开机自动重连）。
+     * <p>Pilot 模式：始终跳过注册流程，直接 update_topo 上线。
+     */
     @PostMapping("/online")
     public Map<String, Object> online(@RequestBody(required = false) Map<String, Object> body) {
         boolean skipRegister = body != null
                 && Boolean.parseBoolean(String.valueOf(body.getOrDefault("skip_register", false)));
-        DockOnlineService.OnlineResult onlineResult = skipRegister
-                ? onlineService.onlineOnly() : onlineService.online();
+        DockOnlineService.OnlineResult onlineResult;
+        if (runtimeConfig.getDeviceMode() == DeviceMode.PILOT) {
+            // Pilot 模式：跳过注册流程，直接 update_topo 上线
+            onlineResult = pilotOnlineService.online();
+        } else {
+            // Dock 模式：支持 skip_register 跳过注册（用于已注册设备的开机自动重连）
+            onlineResult = skipRegister ? onlineService.onlineOnly() : onlineService.online();
+        }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("success", onlineResult.success());
         result.put("code", onlineResult.code());
@@ -108,7 +123,11 @@ public class SimulatorController {
     /** 设备下线：停止 OSD + update_topo 空列表 + 断开 MQTT */
     @PostMapping("/offline")
     public Map<String, Object> offline() {
-        onlineService.offline();
+        if (runtimeConfig.getDeviceMode() == DeviceMode.PILOT) {
+            pilotOnlineService.offline();
+        } else {
+            onlineService.offline();
+        }
         mqtt.disconnect();
         diagnosticRecorder.clear();
         Map<String, Object> result = new LinkedHashMap<>();
@@ -126,6 +145,9 @@ public class SimulatorController {
         result.put("droneSn", runtimeConfig.getDroneSn());
         result.put("dockModelKey", runtimeConfig.getDockType().modelKey());
         result.put("droneModelKey", runtimeConfig.getDroneType().modelKey());
+        result.put("controllerSn", runtimeConfig.getControllerSn());
+        result.put("controllerModelKey", runtimeConfig.getControllerType().modelKey());
+        result.put("deviceMode", runtimeConfig.getDeviceMode().name());
         return result;
     }
 
@@ -144,26 +166,33 @@ public class SimulatorController {
         if (updates.containsKey("dockTemperature")) state.setDockTemperature(((Number) updates.get("dockTemperature")).doubleValue());
         if (updates.containsKey("dockHumidity")) state.setDockHumidity(((Number) updates.get("dockHumidity")).doubleValue());
         if (updates.containsKey("windSpeed")) state.setWindSpeed(((Number) updates.get("windSpeed")).doubleValue());
-        if (updates.containsKey("rainfall")) state.setRainfall(((Number) updates.get("rainfall")).doubleValue());
+        if (updates.containsKey("rainfall")) state.setRainfall(((Number) updates.get("rainfall")).intValue());
         if (updates.containsKey("coverOpen")) state.setCoverOpen(Boolean.parseBoolean(String.valueOf(updates.get("coverOpen"))));
         if (updates.containsKey("droneInDock")) state.setDroneInDock(Boolean.parseBoolean(String.valueOf(updates.get("droneInDock"))));
         if (updates.containsKey("droneActivated")) {
             boolean oldValue = state.isDroneActivated();
             boolean newValue = Boolean.parseBoolean(String.valueOf(updates.get("droneActivated")));
-            state.setDroneActivated(newValue);
-            if (state.isOnline()) {
-                if (!oldValue && newValue) {
-                    // 飞行器从休眠→激活：推送 drone state 初始属性（事件性上报）
-                    onlineService.publishDroneState();
-                } else if (oldValue && !newValue) {
-                    // 飞行器从激活→休眠：发送 update_topo 通知平台飞行器下线
-                    onlineService.publishDroneSleepTopo();
+            // Pilot 模式下飞行器始终激活，不允许切换为休眠
+            if (runtimeConfig.getDeviceMode() == DeviceMode.PILOT && !newValue) {
+                log.warn("Pilot 模式下飞行器始终激活，忽略 droneActivated=false 请求");
+            } else {
+                state.setDroneActivated(newValue);
+                if (state.isOnline()) {
+                    if (!oldValue && newValue) {
+                        // 飞行器从休眠→激活：推送 drone state 初始属性（事件性上报）
+                        onlineService.publishDroneState();
+                    } else if (oldValue && !newValue) {
+                        // 飞行器从激活→休眠：发送 update_topo 通知平台飞行器下线
+                        onlineService.publishDroneSleepTopo();
+                    }
                 }
             }
         }
         if (updates.containsKey("droneChargeState")) state.setDroneChargeState(((Number) updates.get("droneChargeState")).intValue());
         if (updates.containsKey("backupBatteryTemperature")) state.setBackupBatteryTemperature(((Number) updates.get("backupBatteryTemperature")).doubleValue());
         if (updates.containsKey("silentMode")) state.setSilentMode(((Number) updates.get("silentMode")).intValue());
+        // Pilot 模式遥控器电量（capacity_percent），Dock 模式忽略此字段
+        if (updates.containsKey("controllerCapacity")) state.setControllerCapacity(((Number) updates.get("controllerCapacity")).intValue());
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("success", true);
         result.put("state", state);
@@ -241,6 +270,7 @@ public class SimulatorController {
         result.put("mode_code", state.getDroneModeCode());
         result.put("in_dock", state.isDroneInDock());
         result.put("activated", state.isDroneActivated());
+        result.put("rc_lost_action", state.getRcLostAction());
         return result;
     }
 
@@ -528,6 +558,43 @@ public class SimulatorController {
         return result;
     }
 
+    @PostMapping("/flight/trigger-rc-lost")
+    public Map<String, Object> triggerRcLost() {
+        String err = flightCommandSimulator.triggerRcLost();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", err == null);
+        if (err != null) {
+            result.put("message", err);
+        }
+        return result;
+    }
+
+    /** 设置 rc_lost_action 值（0=悬停, 1=降落, 2=返航） */
+    @PostMapping("/drone/rc-lost-action")
+    public Map<String, Object> setRcLostAction(@RequestBody Map<String, Object> body) {
+        Object value = body.get("rc_lost_action");
+        int action;
+        try {
+            action = Integer.parseInt(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("success", false);
+            result.put("message", "rc_lost_action 值无效");
+            return result;
+        }
+        if (action < 0 || action > 2) {
+            Map<String, Object> result = new LinkedHashMap<>();
+            result.put("success", false);
+            result.put("message", "rc_lost_action 取值范围 0-2");
+            return result;
+        }
+        state.setRcLostAction(action);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("rc_lost_action", action);
+        return result;
+    }
+
     // ==================== 消息日志 ====================
 
     /** 获取最近 MQTT 消息日志 */
@@ -571,6 +638,11 @@ public class SimulatorController {
         result.put("app_license", runtimeConfig.getAppLicense());
         result.put("dock_type", runtimeConfig.getDockType().name());
         result.put("drone_type", runtimeConfig.getDroneType().name());
+        result.put("device_mode", runtimeConfig.getDeviceMode().name());
+        result.put("controller_type", runtimeConfig.getControllerType().name());
+        result.put("controller_sn", runtimeConfig.getControllerSn());
+        result.put("dock_sn", runtimeConfig.getDockSn());
+        result.put("drone_sn", runtimeConfig.getDroneSn());
         return result;
     }
 
@@ -617,6 +689,16 @@ public class SimulatorController {
         if (config.containsKey("drone_type") && config.get("drone_type") != null) {
             try {
                 runtimeConfig.setDroneType(DeviceType.valueOf(String.valueOf(config.get("drone_type")).trim().toUpperCase()));
+            } catch (IllegalArgumentException ignored) {}
+        }
+        if (config.containsKey("device_mode") && config.get("device_mode") != null) {
+            try {
+                runtimeConfig.setDeviceMode(DeviceMode.valueOf(String.valueOf(config.get("device_mode")).trim().toUpperCase()));
+            } catch (IllegalArgumentException ignored) {}
+        }
+        if (config.containsKey("controller_type") && config.get("controller_type") != null) {
+            try {
+                runtimeConfig.setControllerType(DeviceType.valueOf(String.valueOf(config.get("controller_type")).trim().toUpperCase()));
             } catch (IllegalArgumentException ignored) {}
         }
 

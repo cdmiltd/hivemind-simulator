@@ -20,6 +20,8 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import ltd.cdmi.hivemind.simulator.config.RuntimeConfig;
 import ltd.cdmi.hivemind.simulator.config.SimulatorProperties;
+import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticCode;
+import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
 import ltd.cdmi.hivemind.simulator.mqtt.DrcMessage;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
 import ltd.cdmi.hivemind.simulator.mqtt.TopicConstants;
@@ -58,6 +60,8 @@ public class DeviceSimulator {
     private final List<OsdStrategy> strategies;
     private final List<DockOsdBuilder> dockBuilders;
     private final List<DroneOsdBuilder> droneBuilders;
+    private final List<ControllerOsdBuilder> controllerBuilders;
+    private final DiagnosticLogRecorder diagnosticRecorder;
 
     private ScheduledExecutorService scheduler;
 
@@ -65,7 +69,9 @@ public class DeviceSimulator {
                            ObjectMapper objectMapper, RuntimeConfig runtimeConfig,
                            List<OsdStrategy> strategies,
                            List<DockOsdBuilder> dockBuilders,
-                           List<DroneOsdBuilder> droneBuilders) {
+                           List<DroneOsdBuilder> droneBuilders,
+                           List<ControllerOsdBuilder> controllerBuilders,
+                           DiagnosticLogRecorder diagnosticRecorder) {
         this.props = props;
         this.mqtt = mqtt;
         this.state = state;
@@ -74,6 +80,8 @@ public class DeviceSimulator {
         this.strategies = strategies;
         this.dockBuilders = dockBuilders;
         this.droneBuilders = droneBuilders;
+        this.controllerBuilders = controllerBuilders;
+        this.diagnosticRecorder = diagnosticRecorder;
     }
 
     /**
@@ -119,6 +127,19 @@ public class DeviceSimulator {
         return droneBuilders.get(0); // 兜底
     }
 
+    /**
+     * 根据当前 controllerType 选择遥控器 OSD Builder（Pilot 模式）。
+     */
+    private ControllerOsdBuilder selectControllerBuilder() {
+        DeviceType controllerType = runtimeConfig.getControllerType();
+        for (ControllerOsdBuilder b : controllerBuilders) {
+            if (b.supports(controllerType)) {
+                return b;
+            }
+        }
+        return controllerBuilders.get(0); // 兜底
+    }
+
     @PostConstruct
     public void init() {
         // 初始化无人机位置为机场位置
@@ -133,6 +154,52 @@ public class DeviceSimulator {
         });
         scheduler.scheduleAtFixedRate(this::publishOsd, 2, OSD_INTERVAL_SECONDS, TimeUnit.SECONDS);
         log.info("OSD 上报调度器已启动，频率 {}Hz", 1.0 / OSD_INTERVAL_SECONDS);
+
+        // M-2 诊断日志：Dock OSD 分多条推送的字段分组方案为推断（DJI 文档仅提供 Dock1 示例，Dock3 具体分组未明确）
+        String inference = "Dock OSD 分多条推送的字段分组方案：DJI 文档明确「机场的设备属性推送是分多条推送的」并提供 Dock1 示例（3 组），"
+            + "但 Dock3 具体字段分组未明确。模拟器按 Dock1 示例的分组模式推断 Dock3 分组（Group1=电源/电池/保养/统计, Group2=任务/图传/媒体, Group3=位置/环境/机械/子设备），待真机验证";
+        diagnosticRecorder.record(DiagnosticCode.MONITOR_SIMULATOR_INFERENCE, "dock_osd_multi_message", inference);
+        log.warn("[M-2] Dock OSD 分多条推送字段分组为推断（基于 Dock1 示例适配 Dock3），待真机验证");
+
+        // M-2 诊断日志：飞行器 OSD track_id 字段文档未明确，按真机 OSD 示例上报
+        String trackIdInference = "飞行器 OSD track_id 字段：DJI M4D/M30 properties 文档字段列表未明确显示 track_id，"
+            + "但真机 M30 OSD 示例中包含此字段（值为空字符串）。模拟器按真机示例上报 track_id，待真机验证";
+        diagnosticRecorder.record(DiagnosticCode.MONITOR_SIMULATOR_INFERENCE, "drone_osd_track_id", trackIdInference);
+        log.warn("[M-2] 飞行器 OSD track_id 字段文档未明确，按真机示例上报，待真机验证");
+
+        // M-2 诊断日志：Dock putter_state 字段，Dock1 文档确认有，Dock2/Dock3 文档属性列表无但 OSD 示例有
+        String putterStateInference = "机场 OSD putter_state 字段：Dock1 properties 文档属性列表明确有此字段（推杆状态，pushMode=0, r），"
+            + "但 Dock2/Dock3 properties 文档属性列表无此字段。DJI OSD 结构示例（topic-definition.html）和 Dock2 设备属性推送示例中均包含 putter_state。"
+            + "模拟器三版均上报 putter_state=0（关闭），Dock2/Dock3 待真机验证";
+        diagnosticRecorder.record(DiagnosticCode.MONITOR_SIMULATOR_INFERENCE, "dock_osd_putter_state", putterStateInference);
+        log.warn("[M-2] Dock2/Dock3 putter_state 文档属性列表无但示例有，三版均上报，待真机验证");
+
+        // M-2 诊断日志：飞行器负载属性上报，measure_target_* 字段为模拟值（无测距场景）
+        String payloadInference = "飞行器 OSD 负载属性上报：DJI 文档「负载属性上报」明确以负载索引（{type-subtype-gimbalIndex}）为 key 上报相机属性，"
+            + "OSD（pushMode=0）包含 gimbal_pitch/roll/yaw + measure_target_* + zoom_factor + thermal_*（仅 thermal 机型）。"
+            + "payload_index 是 pushMode=1（state topic），不在 OSD 中；version 字段文档中不存在，不上报。"
+            + "模拟器不模拟测距场景，measure_target_error_state=3（NO_SIGNAL），其余 measure_target_* 为 0。负载索引按机型自动匹配（M30→52-0-0, M3D→80-0-0, M4D→98-0-0），待真机验证";
+        diagnosticRecorder.record(DiagnosticCode.MONITOR_SIMULATOR_INFERENCE, "drone_osd_payload", payloadInference);
+        log.warn("[M-2] 飞行器负载属性 measure_target_* 为模拟值（无测距场景），待真机验证");
+
+        // M-2 诊断日志：electric_supply_voltage 是 OSD 封面字段，但 Dock2/Dock3 属性列表无
+        String esvInference = "机场 OSD electric_supply_voltage 字段：topic-definition.html OSD 结构示例（封面字段）中包含此字段，"
+            + "但 Dock2/Dock3 properties 文档属性列表无此字段，仅 Dock1 属性列表有。"
+            + "模拟器三版均上报 electric_supply_voltage（从 DeviceState 读取），Dock2/Dock3 待真机验证";
+        diagnosticRecorder.record(DiagnosticCode.MONITOR_SIMULATOR_INFERENCE, "dock_osd_electric_supply_voltage", esvInference);
+        log.warn("[M-2] electric_supply_voltage 是 OSD 封面字段，Dock2/Dock3 属性列表无，三版均上报，待真机验证");
+
+        // M-2 诊断日志：Dock1 OSD 示例用 air_conditioner_mode（标量），但属性列表用 air_conditioner（struct）
+        String acInference = "机场 OSD air_conditioner 字段：Dock1/Dock2/Dock3 属性列表均标注为 struct（含 air_conditioner_state + switch_time），"
+            + "但 Dock1 OSD 结构示例误用标量 air_conditioner_mode。模拟器以属性列表为准，三版均上报 struct air_conditioner，待真机验证";
+        diagnosticRecorder.record(DiagnosticCode.MONITOR_SIMULATOR_INFERENCE, "dock_osd_air_conditioner", acInference);
+        log.warn("[M-2] Dock1 OSD 示例用 air_conditioner_mode 标量，属性列表用 air_conditioner struct，以属性列表为准，待真机验证");
+
+        // M-2 诊断日志：Dock1 sub_device 字段名 product_type（属性列表）vs device_model_key（OSD 示例）
+        String sdmInference = "机场 OSD sub_device 字段名：Dock1 属性列表标注 product_type，但 Dock1/Dock2/Dock3 OSD 示例均用 device_model_key。"
+            + "模拟器三版统一使用 device_model_key，待真机验证";
+        diagnosticRecorder.record(DiagnosticCode.MONITOR_SIMULATOR_INFERENCE, "dock_osd_sub_device_model_key", sdmInference);
+        log.warn("[M-2] Dock1 sub_device 字段名 product_type（属性列表）vs device_model_key（OSD 示例），三版统一用 device_model_key，待真机验证");
     }
 
     @PreDestroy
@@ -152,14 +219,22 @@ public class DeviceSimulator {
         try {
             OsdContext ctx = new OsdContext(state, props, runtimeConfig, currentStrategy());
 
-            // Dock OSD（始终推送）
-            String dockOsdTopic = TopicConstants.topic(TopicConstants.OSD, runtimeConfig.getDockSn());
-            mqtt.publish(dockOsdTopic, wrapOsd(selectDockBuilder().buildDockOsd(ctx)));
+            // 网关 OSD（始终推送）：Dock 模式推送 Dock OSD（分多条），Pilot 模式推送 Controller OSD（单条）
+            String gatewaySn = runtimeConfig.getGatewaySn();
+            String gatewayOsdTopic = TopicConstants.topic(TopicConstants.OSD, gatewaySn);
+            if (runtimeConfig.getDeviceMode() == DeviceMode.PILOT) {
+                mqtt.publish(gatewayOsdTopic, wrapOsd(selectControllerBuilder().buildControllerOsd(ctx), gatewaySn));
+            } else {
+                // 对齐 DJI 文档「机场的设备属性推送是分多条推送的」
+                for (Map<String, Object> data : selectDockBuilder().buildDockOsd(ctx)) {
+                    mqtt.publish(gatewayOsdTopic, wrapOsd(data, gatewaySn));
+                }
+            }
 
             // Drone OSD（仅飞行器激活时推送，休眠状态不推送）
             if (state.isDroneActivated()) {
                 String droneOsdTopic = TopicConstants.topic(TopicConstants.OSD, runtimeConfig.getDroneSn());
-                mqtt.publish(droneOsdTopic, wrapOsd(selectDroneBuilder().buildDroneOsd(ctx)));
+                mqtt.publish(droneOsdTopic, wrapOsd(selectDroneBuilder().buildDroneOsd(ctx), gatewaySn));
             }
 
             // DRC 事件推送（仅在 DRC 模式激活时）
@@ -177,7 +252,7 @@ public class DeviceSimulator {
      * <p>推送频率与 OSD 一致（0.5Hz），由 {@link #publishOsd()} 统一调度。</p>
      */
     private void publishDrcEvents() {
-        String drcUpTopic = TopicConstants.topic(TopicConstants.DRC_UP, runtimeConfig.getDockSn());
+        String drcUpTopic = TopicConstants.topic(TopicConstants.DRC_UP, runtimeConfig.getGatewaySn());
 
         // drc_drone_state_push：飞行器状态
         Map<String, Object> droneState = new LinkedHashMap<>();
@@ -191,6 +266,15 @@ public class DeviceSimulator {
 
         // drc_camera_osd_info_push：摄像头 OSD
         mqtt.publishJson(drcUpTopic, DrcMessage.event("drc_camera_osd_info_push", buildDrcCameraOsdInfo()));
+
+        // hsi_info_push：避障信息上报
+        mqtt.publishJson(drcUpTopic, DrcMessage.event("hsi_info_push", buildHsiInfo()));
+
+        // delay_info_push：图传链路延时信息上报
+        mqtt.publishJson(drcUpTopic, DrcMessage.event("delay_info_push", buildDelayInfo()));
+
+        // osd_info_push：高频 osd 信息上报
+        mqtt.publishJson(drcUpTopic, DrcMessage.event("osd_info_push", buildOsdInfo()));
 
         // Phase 4: PSDK + AI 事件推送（Dock3 专属）
         publishPsdkAndAiEvents(drcUpTopic);
@@ -418,15 +502,87 @@ public class DeviceSimulator {
     }
 
     /**
-     * 包装 OSD 数据为 DJI Cloud API 协议格式。
-     * <p>格式：{@code {"bid":"...","data":{...},"timestamp":...,"version":"dock3"}}</p>
+     * 构造 hsi_info_push 避障信息（DJI Dock3 remote-control hsi_info_push）。
+     * <p>模拟器默认：所有避障开关启用且正常工作，around_distances 上报空数组（无障碍物）。</p>
      */
-    private String wrapOsd(Map<String, Object> data) {
+    private Map<String, Object> buildHsiInfo() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("up_distance", 10000);
+        data.put("down_distance", 10000);
+        data.put("up_enable", true);
+        data.put("up_work", true);
+        data.put("down_enable", true);
+        data.put("down_work", true);
+        data.put("left_enable", true);
+        data.put("left_work", true);
+        data.put("right_enable", true);
+        data.put("right_work", true);
+        data.put("front_enable", true);
+        data.put("front_work", true);
+        data.put("back_enable", true);
+        data.put("back_work", true);
+        data.put("vertical_enable", true);
+        data.put("vertical_work", true);
+        data.put("horizontal_enable", true);
+        data.put("horizontal_work", true);
+        // 空数组表示任意角度都无障碍物（DJI 文档明确）
+        data.put("around_distances", List.of());
+        return data;
+    }
+
+    /**
+     * 构造 delay_info_push 图传链路延时信息（DJI Dock3 remote-control delay_info_push）。
+     * <p>模拟器默认：sdr_cmd_delay=10ms，广角+变焦两路码流延时 60/80ms。</p>
+     */
+    private Map<String, Object> buildDelayInfo() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("sdr_cmd_delay", 10);
+        List<Map<String, Object>> delayList = new ArrayList<>();
+        String droneSn = runtimeConfig.getDroneSn();
+        delayList.add(buildLiveviewDelay(droneSn + "/" + state.getPayloadIndex() + "/normal-0", 60));
+        delayList.add(buildLiveviewDelay(droneSn + "/" + state.getPayloadIndex() + "/zoom-0", 80));
+        data.put("liveview_delay_list", delayList);
+        return data;
+    }
+
+    /** 构造单路码流延时记录 */
+    private Map<String, Object> buildLiveviewDelay(String videoId, int delayMs) {
+        Map<String, Object> entry = new LinkedHashMap<>();
+        entry.put("video_id", videoId);
+        entry.put("liveview_delay_time", delayMs);
+        return entry;
+    }
+
+    /**
+     * 构造 osd_info_push 高频 OSD 信息（DJI Dock3 remote-control osd_info_push）。
+     * <p>从 DeviceState 读取飞行器位置/姿态/速度，云台角度暂用默认值 0。</p>
+     */
+    private Map<String, Object> buildOsdInfo() {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("attitude_head", state.getAttitudeYaw());
+        data.put("latitude", state.getDroneLatitude());
+        data.put("longitude", state.getDroneLongitude());
+        data.put("height", state.getDroneHeight());
+        data.put("speed_x", state.getHorizontalSpeed());
+        data.put("speed_y", 0.0);
+        data.put("speed_z", state.getVerticalSpeed());
+        data.put("gimbal_pitch", 0.0);
+        data.put("gimbal_roll", 0.0);
+        data.put("gimbal_yaw", 0.0);
+        return data;
+    }
+
+    /**
+     * 包装 OSD 数据为 DJI Cloud API 协议格式。
+     * <p>格式：{@code {bid, tid, timestamp, gateway, data}}</p>
+     */
+    private String wrapOsd(Map<String, Object> data, String gatewaySn) {
         Map<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("bid", UUID.randomUUID().toString());
-        envelope.put("data", data);
+        envelope.put("tid", UUID.randomUUID().toString());
         envelope.put("timestamp", System.currentTimeMillis());
-        envelope.put("version", currentStrategy().version());
+        envelope.put("gateway", gatewaySn);
+        envelope.put("data", data);
         try {
             return objectMapper.writeValueAsString(envelope);
         } catch (Exception e) {

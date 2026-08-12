@@ -27,6 +27,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -193,7 +194,8 @@ public class DockOnlineService {
             //    hivemind 据此校验绑定码：result=210229 表示绑定码错误
             String bindCode = runtimeConfig.getDeviceBindingCode();
             JsonNode orgGetReply = sendRequest("airport_organization_get", Map.of(
-                    "device_binding_code", bindCode
+                    "device_binding_code", bindCode,
+                    "organization_id", runtimeConfig.getOrganizationId()
             ));
             if (orgGetReply == null) {
                 log.warn("airport_organization_get 超时，平台无响应，停止注册流程");
@@ -225,8 +227,7 @@ public class DockOnlineService {
                                     "organization_id", orgId,
                                     "device_binding_code", bindCode
                             )
-                    ),
-                    "organization_id", orgId
+                    )
             ));
             if (orgBindReply == null) {
                 log.warn("airport_organization_bind 超时，平台无响应，停止注册流程");
@@ -253,6 +254,8 @@ public class DockOnlineService {
             state.setOnline(true);
             // 上报 live_capacity，告知云端设备直播能力（hivemind 据此注册可用视频流）
             publishLiveCapacity();
+            // 推送机场 state 属性初始值（pushMode=1 属性）
+            publishDockState();
             log.info("机场上线流程完成: dockSn={}, droneSn={}", runtimeConfig.getDockSn(), runtimeConfig.getDroneSn());
             return OnlineResult.ok();
         } catch (Exception e) {
@@ -288,6 +291,8 @@ public class DockOnlineService {
             }
             state.setOnline(true);
             publishLiveCapacity();
+            // 推送机场 state 属性初始值（pushMode=1 属性）
+            publishDockState();
             log.info("机场上线流程完成: dockSn={}, droneSn={}", runtimeConfig.getDockSn(), runtimeConfig.getDroneSn());
             return OnlineResult.ok();
         } catch (Exception e) {
@@ -308,11 +313,15 @@ public class DockOnlineService {
         state.setOnline(false);  // 先标记离线，停止 OSD 上报
 
         // 发 update_topo 下线（sub_devices 为空表示下线）
+        DeviceType dockType = runtimeConfig.getDockType();
         String tid = UUID.randomUUID().toString();
         String bid = UUID.randomUUID().toString();
         Map<String, Object> data = new LinkedHashMap<>();
-        data.put("type", 3);
-        data.put("sub_type", 0);
+        data.put("domain", String.valueOf(dockType.getDomain()));
+        data.put("type", dockType.getType());
+        data.put("sub_type", dockType.getSubType());
+        data.put("device_secret", "secret");
+        data.put("nonce", "nonce");
         data.put("sub_devices", List.of());
         data.put("thing_version", "3.0.0.0");
         publishStatus("update_topo", tid, bid, data);
@@ -336,8 +345,11 @@ public class DockOnlineService {
         String tid = UUID.randomUUID().toString();
         String bid = UUID.randomUUID().toString();
         Map<String, Object> data = new LinkedHashMap<>();
+        data.put("domain", String.valueOf(runtimeConfig.getDockType().getDomain()));
         data.put("type", runtimeConfig.getDockType().getType());
         data.put("sub_type", runtimeConfig.getDockType().getSubType());
+        data.put("device_secret", "secret");
+        data.put("nonce", "nonce");
         data.put("sub_devices", List.of());
         data.put("thing_version", "3.0.0.0");
         publishStatus("update_topo", tid, bid, data);
@@ -358,33 +370,59 @@ public class DockOnlineService {
      *
      * @return true 表示继续上线，false 表示停止上线
      */
-    private boolean sendUpdateTopo() {
-        String tid = UUID.randomUUID().toString();
-        String bid = UUID.randomUUID().toString();
-
+    /** 构造 update_topo 上线报文数据（sub_devices 根据飞行器激活状态决定） */
+    private Map<String, Object> buildUpdateTopoData() {
         DeviceType dockType = runtimeConfig.getDockType();
         DeviceType droneType = runtimeConfig.getDroneType();
 
-        // DJI update_topo 的 data 顶层不含 domain 字段（在 sub_devices 元素中），否则被误判为 Autel
+        // DJI update_topo: data 顶层包含网关设备的 domain（string）、type（int）、sub_type（int）、
+        // device_secret（text）、nonce（text）、thing_version（text）
         // sub_devices 根据飞行器激活状态决定：激活时包含飞行器，休眠时为空
         Map<String, Object> data = new LinkedHashMap<>();
+        data.put("domain", String.valueOf(dockType.getDomain()));
         data.put("type", dockType.getType());
         data.put("sub_type", dockType.getSubType());
+        data.put("device_secret", "secret");
+        data.put("nonce", "nonce");
         if (state.isDroneActivated()) {
             data.put("sub_devices", List.of(
                     Map.of(
                             "sn", runtimeConfig.getDroneSn(),
-                            "domain", droneType.getDomain(),
+                            "domain", String.valueOf(droneType.getDomain()),
                             "type", droneType.getType(),
                             "sub_type", droneType.getSubType(),
                             "index", "A",
-                            "firmware_version", "0.0.0.0"
+                            "device_secret", "secret",
+                            "nonce", "nonce",
+                            "thing_version", "3.0.0.0"
                     )
             ));
         } else {
             data.put("sub_devices", List.of());
         }
         data.put("thing_version", "3.0.0.0");
+        return data;
+    }
+
+    /**
+     * 重发 update_topo 上线报文（不等待回复）。
+     * <p>供监控器连接时获取设备拓扑：监控器后连接时可能错过之前的 update_topo，
+     * 重发一次让监控器能发现已在线的设备。</p>
+     * <p>设备未在线时不执行。</p>
+     */
+    public void resendTopo() {
+        if (!state.isOnline()) return;
+        String tid = UUID.randomUUID().toString();
+        String bid = UUID.randomUUID().toString();
+        publishStatus("update_topo", tid, bid, buildUpdateTopoData());
+        log.info("监控器连接，重发 update_topo 供监控器发现设备");
+    }
+
+    private boolean sendUpdateTopo() {
+        String tid = UUID.randomUUID().toString();
+        String bid = UUID.randomUUID().toString();
+
+        Map<String, Object> data = buildUpdateTopoData();
 
         CompletableFuture<JsonNode> future = new CompletableFuture<>();
         pendingReplies.put(tid, future);
@@ -455,10 +493,11 @@ public class DockOnlineService {
     private void publishRequest(String method, String tid, String bid, Map<String, Object> data) {
         Map<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("bid", bid);
-        envelope.put("data", data);
         envelope.put("tid", tid);
         envelope.put("timestamp", System.currentTimeMillis());
+        envelope.put("gateway", runtimeConfig.getDockSn());
         envelope.put("method", method);
+        envelope.put("data", data);
         String topic = TopicConstants.topic(TopicConstants.REQUESTS, runtimeConfig.getDockSn());
         mqtt.publishJson(topic, envelope);
         log.info("已发送 requests: method={}, tid={}", method, tid);
@@ -506,13 +545,115 @@ public class DockOnlineService {
 
         Map<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("bid", UUID.randomUUID().toString());
-        envelope.put("data", data);
         envelope.put("tid", UUID.randomUUID().toString());
         envelope.put("timestamp", System.currentTimeMillis());
+        envelope.put("gateway", runtimeConfig.getDockSn());
+        envelope.put("data", data);
 
         String topic = TopicConstants.topic(TopicConstants.STATE, runtimeConfig.getDockSn());
         mqtt.publishJson(topic, envelope);
         log.info("已上报 live_capacity（state topic）");
+    }
+
+    /**
+     * 推送机场 state 属性到 thing/product/{dockSn}/state。
+     * <p>机场上线后调用，推送所有 pushMode=1 的机场属性初始值。
+     * 对齐 DJI 设备属性文档，pushMode=1 的属性在状态变化时上报：
+     * https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/properties.html</p>
+     */
+    public void publishDockState() {
+        if (!state.isOnline()) {
+            log.warn("设备未上线，跳过 dock state 推送");
+            return;
+        }
+        if (!mqtt.isConnected()) {
+            log.warn("MQTT 未连接，跳过 dock state 推送");
+            return;
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+
+        // 固件相关（pushMode=1, r）
+        data.put("firmware_version", "0.0.0.0");           // 固件版本
+        data.put("firmware_upgrade_status", 0);             // 未升级
+        data.put("compatible_status", 0);                   // 不需要一致性升级
+
+        // 运行信息（pushMode=1, r）
+        data.put("acc_time", 0);                            // 机场累计运行时长（s）
+
+        // 用户配置（pushMode=1, rw）— 从 DeviceState 读取，反映 property/set 设置的值
+        // air_transfer_enable 仅 Dock2/Dock3 支持（DJI 文档 Dock1 properties 列表无此字段）
+        if (runtimeConfig.getDockType() != DeviceType.DOCK1) {
+            data.put("air_transfer_enable", state.isAirTransferEnable());
+        }
+        data.put("user_experience_improvement", state.getUserExperienceImprovement());
+        data.put("silent_mode", state.getSilentMode());
+
+        // RTK 标定源（pushMode=1, r）
+        Map<String, Object> rtcmInfo = new LinkedHashMap<>();
+        rtcmInfo.put("mount_point", "");
+        rtcmInfo.put("port", "");
+        rtcmInfo.put("host", "");
+        rtcmInfo.put("rtcm_device_type", 1);                // 机场
+        rtcmInfo.put("source_type", 0);                     // 未标定
+        data.put("rtcm_info", rtcmInfo);
+
+        // 图传连接拓扑（pushMode=1, r）
+        Map<String, Object> centerNode = new LinkedHashMap<>();
+        centerNode.put("sdr_id", 0);
+        centerNode.put("sn", runtimeConfig.getDroneSn());
+        Map<String, Object> wirelessLinkTopo = new LinkedHashMap<>();
+        // secret_code: 28 元素数组（全 0）
+        List<Integer> secretCode = new ArrayList<>();
+        for (int i = 0; i < 28; i++) {
+            secretCode.add(0);
+        }
+        wirelessLinkTopo.put("secret_code", secretCode);
+        wirelessLinkTopo.put("center_node", centerNode);
+        wirelessLinkTopo.put("leaf_nodes", List.of());
+        data.put("wireless_link_topo", wirelessLinkTopo);
+
+        // 4G Dongle 信息（pushMode=1, r）
+        Map<String, Object> dongleInfo = new LinkedHashMap<>();
+        dongleInfo.put("imei", "");
+        dongleInfo.put("dongle_type", 10);                  // 支持 eSIM 的新 Dongle
+        dongleInfo.put("eid", "");
+        dongleInfo.put("esim_activate_state", 0);            // 未知
+        dongleInfo.put("sim_card_state", 1);                 // 已插入
+        dongleInfo.put("sim_slot", 2);                       // eSIM
+        dongleInfo.put("esim_infos", List.of());
+        Map<String, Object> simInfo = new LinkedHashMap<>();
+        simInfo.put("telecom_operator", 0);                  // 未知
+        simInfo.put("sim_type", 0);                          // 未知
+        simInfo.put("iccid", "");
+        dongleInfo.put("sim_info", simInfo);
+        data.put("dongle_infos", List.of(dongleInfo));
+
+        // 直播状态推送（pushMode=1, r）— 无在推视频流时为空数组
+        data.put("live_status", List.of());
+
+        // Dock1 特有：drone_authority_info.payloads（pushMode=1，负载控制权状态）
+        if (runtimeConfig.getDockType() == DeviceType.DOCK1) {
+            Map<String, Object> droneAuthorityInfo = new LinkedHashMap<>();
+            PayloadType camera = PayloadType.defaultCameraFor(runtimeConfig.getDroneType());
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("control_source", "A");
+            payload.put("payload_index", camera != null ? camera.cameraIndex() : "52-0-0");
+            payload.put("sn", "simulated-payload-001");
+            droneAuthorityInfo.put("payloads", List.of(payload));
+            data.put("drone_authority_info", droneAuthorityInfo);
+        }
+
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("bid", UUID.randomUUID().toString());
+        envelope.put("data", data);
+        envelope.put("tid", UUID.randomUUID().toString());
+        envelope.put("timestamp", System.currentTimeMillis());
+        envelope.put("gateway", runtimeConfig.getDockSn());
+
+        String topic = TopicConstants.topic(TopicConstants.STATE, runtimeConfig.getDockSn());
+        mqtt.publishJson(topic, envelope);
+        log.info("已推送 dock state（{} 属性）", data.size());
     }
 
     /**
@@ -533,11 +674,14 @@ public class DockOnlineService {
         }
 
         Map<String, Object> data = new LinkedHashMap<>();
+        DeviceType droneType = runtimeConfig.getDroneType();
 
-        // payloads — 负载状态
+        // payloads — 负载状态（pushMode=1）
+        // payload_index 按机型动态获取（M30→52-0-0, M30T→53-0-0, M3D→80-0-0, M4D→98-0-0 等）
+        PayloadType droneCamera = PayloadType.defaultCameraFor(droneType);
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("control_source", "A");
-        payload.put("payload_index", "165-0-7");
+        payload.put("payload_index", droneCamera != null ? droneCamera.cameraIndex() : "52-0-0");
         payload.put("firmware_version", "0.0.0.0");
         payload.put("sn", runtimeConfig.getDroneSn());
         data.put("payloads", List.of(payload));
@@ -580,14 +724,62 @@ public class DockOnlineService {
         data.put("serious_low_battery_warning_threshold", 20);
 
         // rth_mode / current_rth_mode — 返航高度模式（机场只支持设定高度=1）
-        data.put("rth_mode", 1);
+        // rth_mode 仅 M3D/M4D 文档有（M30 文档无此字段），current_rth_mode 三版共有
         data.put("current_rth_mode", 1);
+        if (droneType == DeviceType.M3D || droneType == DeviceType.M3TD
+                || droneType == DeviceType.M4D || droneType == DeviceType.M4TD) {
+            data.put("rth_mode", 1);
+        }
 
         // psdk_ui_resource — psdk ui 资源包
         data.put("psdk_ui_resource", List.of());
 
         // psdk_widget_values — psdk 负载设备属性值
         data.put("psdk_widget_values", List.of());
+
+        // {type-subtype-gimbalindex} / type_subtype_gimbalindex 的 pushMode=1 子字段
+        // M30 旧版方式：payload_index（pushMode=1）+ thermal_supported_palette_styles（pushMode=1, 仅 thermal）
+        // M3D/M4D 升级方式：thermal_supported_palette_styles（pushMode=1, 仅 thermal）
+        boolean isThermalDrone = droneType == DeviceType.M30T || droneType == DeviceType.M3TD || droneType == DeviceType.M4TD;
+        if (droneType == DeviceType.M30 || droneType == DeviceType.M30T) {
+            // M30 旧版方式：以负载索引为 key
+            PayloadType camera = PayloadType.defaultCameraFor(droneType);
+            if (camera != null) {
+                Map<String, Object> payloadStruct = new LinkedHashMap<>();
+                payloadStruct.put("payload_index", camera.cameraIndex());
+                if (isThermalDrone) {
+                    payloadStruct.put("thermal_supported_palette_styles", List.of(0, 1, 2, 3, 5, 6, 8, 11, 12, 13));
+                }
+                data.put(camera.cameraIndex(), payloadStruct);
+            }
+        } else if (isThermalDrone && (droneType == DeviceType.M3D || droneType == DeviceType.M3TD
+                || droneType == DeviceType.M4D || droneType == DeviceType.M4TD)) {
+            // M3D/M4D 升级方式：type_subtype_gimbalindex struct
+            Map<String, Object> gimbalStruct = new LinkedHashMap<>();
+            gimbalStruct.put("thermal_supported_palette_styles", List.of(0, 1, 2, 3, 5, 6, 8, 11, 12, 13));
+            data.put("type_subtype_gimbalindex", gimbalStruct);
+        }
+
+        // M3D/M3TD/M4D/M4TD 特有：wireless_link_topo（pushMode=1, r）— 图传连接拓扑
+        // 核实依据：M3D/M4D properties 文档 wireless_link_topo pushMode=1，应在 state topic 上报
+        // M30 文档无此字段
+        if (droneType == DeviceType.M4D || droneType == DeviceType.M4TD
+                || droneType == DeviceType.M3D || droneType == DeviceType.M3TD) {
+            Map<String, Object> centerNode = new LinkedHashMap<>();
+            centerNode.put("sdr_id", 0);
+            centerNode.put("sn", runtimeConfig.getDroneSn());
+            Map<String, Object> wirelessLinkTopo = new LinkedHashMap<>();
+            // secret_code: 28 元素数组（全 0）
+            List<Integer> secretCode = new ArrayList<>();
+            for (int i = 0; i < 28; i++) {
+                secretCode.add(0);
+            }
+            wirelessLinkTopo.put("secret_code", secretCode);
+            wirelessLinkTopo.put("center_node", centerNode);
+            // leaf_nodes：连接的机场对频信息（空数组，单机场场景）
+            wirelessLinkTopo.put("leaf_nodes", List.of());
+            data.put("wireless_link_topo", wirelessLinkTopo);
+        }
 
         Map<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("bid", UUID.randomUUID().toString());

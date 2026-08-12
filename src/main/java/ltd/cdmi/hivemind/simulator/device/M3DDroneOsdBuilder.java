@@ -19,8 +19,10 @@ import org.springframework.stereotype.Component;
 
 /**
  * M3D/M3TD 飞行器 OSD 字段集构造器。
- * <p>M3D 家族与 M4D 家族 OSD 字段集相似（均有 wireless_link_topo/cameras/type_subtype_gimbalindex），
+ * <p>M3D 家族与 M4D 家族 OSD 字段集相似（均有 cameras/type_subtype_gimbalindex/is_near_area_limit/is_near_height_limit），
  * 继承 {@link M4DDroneOsdBuilder} 复用字段构造逻辑，仅覆盖机型标识与支持范围。</p>
+ * <p>wireless_link_topo（pushMode=1）在 state topic 上报，不在 OSD，由 DockOnlineService.publishDroneState() 推送。</p>
+ * <p>distance_limit_status/rth_altitude 已提升到基类（M30/M3D/M4D 共有）。</p>
  * <p>payload_index 差异由 {@link PayloadType#defaultCameraFor(DeviceType)} 自动处理（M3D→80-0-0，M4D→98-0-0）。</p>
  * <p>参考：<a href="https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/aircraft/m3d-properties.html">M3D/M3TD properties</a></p>
  */

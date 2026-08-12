@@ -31,6 +31,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,6 +59,9 @@ public class WaylineTaskSimulator {
 
     /** 任务进度推进间隔（秒） */
     private static final long PROGRESS_INTERVAL_SECONDS = 3;
+
+    /** 返航飞行模拟延迟（秒）：return_home 后延迟更新位置到机场，使平台可观察 mode_code=9 → 0 过渡 */
+    private static final long RETURN_HOME_DELAY_SECONDS = 5;
 
     /** 任务执行步骤序列（current_step: 7→24→25→27→28→35） */
     private static final int[] STEP_SEQUENCE = {7, 24, 25, 27, 28, 35};
@@ -164,7 +168,7 @@ public class WaylineTaskSimulator {
             case "flighttask_recovery" -> handleRecovery();
             case "flighttask_undo", "flighttask_stop" -> handleStop();
             case "return_home" -> handleReturnHome();
-            case "return_home_cancel" -> Map.of("result", 0);
+            case "return_home_cancel" -> handleReturnHomeCancel();
             case "return_specific_home" -> Map.of("result", 0);
             case "flight_setup_abort" -> handleFlightSetupAbort();
             default -> Map.of("result", 0);
@@ -287,10 +291,53 @@ public class WaylineTaskSimulator {
 
     /**
      * return_home：返航。
+     * <p>立即设置 mode_code=9（自动返航），停止当前航线任务进度，
+     * 并调度延迟任务模拟返航飞行后更新位置到机场（TC-LOC-016）。</p>
+     * <p>延迟更新而非立即更新，使平台可观察到 mode_code=9（返航）→ mode_code=0（待机）的状态过渡。</p>
      */
     private Map<String, Object> handleReturnHome() {
+        // 停止当前航线任务进度（若在执行中）
+        stopProgressTask();
+
+        // 设置返航模式
         state.setDroneModeCode(9); // 自动返航
+
+        // 调度延迟任务：模拟返航飞行后更新位置到机场
+        ScheduledFuture<?> task = scheduler.schedule(this::completeReturnHome,
+                RETURN_HOME_DELAY_SECONDS, TimeUnit.SECONDS);
+        progressTask.set(task);
+
+        // M-2：return_home 命令的后续行为（不发 return_home_info、无进度上报）DJI 文档未明确，待真机验证
+        String inference = "return_home命令后续行为：不发return_home_info（该事件含flight_id属航线任务关联）+ 无进度上报（flighttask_progress的返航阶段属航线任务）"
+                + "，DJI文档未明确return_home命令的后续事件/进度机制，待真机验证";
+        diagnosticRecorder.record(DiagnosticCode.MONITOR_SIMULATOR_INFERENCE, "return_home", inference);
+        log.warn("[M-2] return_home 后续行为未确认: 不发return_home_info + 无进度上报，待真机验证");
+
         log.info("无人机返航: flightId={}", currentFlightId);
+        return Map.of("result", 0);
+    }
+
+    /**
+     * 返航完成：更新无人机位置到机场，恢复 dock 待机状态。
+     * <p>由 {@link #handleReturnHome()} 延迟调度，模拟返航飞行时间。
+     * 复用 {@link #resetDroneToHomeState()} 归舱逻辑，确保位置/模式/dock 状态一致。</p>
+     * <p>对应 TC-LOC-016 return_home 后无人机位置更新到机场。</p>
+     */
+    private void completeReturnHome() {
+        String flightId = currentFlightId;
+        resetDroneToHomeState();
+        resetTaskState();
+        log.info("无人机返航完成，已回到机场位置: flightId={}", flightId);
+    }
+
+    /**
+     * return_home_cancel：取消返航。
+     * <p>取消返航延迟任务，无人机在当前位置悬停。</p>
+     * <p>核实依据：[Dock3 wayline.html 取消返航](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html)</p>
+     */
+    private Map<String, Object> handleReturnHomeCancel() {
+        stopProgressTask(); // 取消返航延迟任务
+        log.info("取消返航: flightId={}", currentFlightId);
         return Map.of("result", 0);
     }
 
@@ -508,16 +555,46 @@ public class WaylineTaskSimulator {
 
     /**
      * 发布 return_home_info 事件。
-     * <p>返航点使用机场位置（运行时可由前端通过 /api/location 修改）。</p>
+     * <p>返航轨迹使用 rth_altitude 构建：当前位置 → 升到返航高度 → 机场位置。
+     * rth_altitude 为相对起飞点高度（ALT），需叠加机场椭球高转换为椭球高。</p>
      */
     private void publishReturnHomeInfo() {
-        Map<String, Object> pathPoint = new LinkedHashMap<>();
-        pathPoint.put("latitude", runtimeConfig.getLocationLatitude());
-        pathPoint.put("longitude", runtimeConfig.getLocationLongitude());
-        pathPoint.put("height", runtimeConfig.getLocationHeight());
+        double droneLat = state.getDroneLatitude();
+        double droneLng = state.getDroneLongitude();
+        double droneHeight = state.getDroneElevation();
+        double rthAltitude = state.getRthAltitude();
+        double homeLat = runtimeConfig.getLocationLatitude();
+        double homeLng = runtimeConfig.getLocationLongitude();
+        double homeHeight = runtimeConfig.getLocationHeight();
+
+        List<Map<String, Object>> pathPoints = new ArrayList<>();
+
+        // 起点：无人机当前位置
+        Map<String, Object> start = new LinkedHashMap<>();
+        start.put("latitude", droneLat);
+        start.put("longitude", droneLng);
+        start.put("height", droneHeight);
+        pathPoints.add(start);
+
+        // 中间点：当前高度低于返航高度时，先升到返航高度再水平飞回
+        double rthHeight = homeHeight + rthAltitude;
+        if (rthAltitude > 0 && droneHeight < rthHeight) {
+            Map<String, Object> climb = new LinkedHashMap<>();
+            climb.put("latitude", droneLat);
+            climb.put("longitude", droneLng);
+            climb.put("height", rthHeight);
+            pathPoints.add(climb);
+        }
+
+        // 终点：机场位置
+        Map<String, Object> home = new LinkedHashMap<>();
+        home.put("latitude", homeLat);
+        home.put("longitude", homeLng);
+        home.put("height", homeHeight);
+        pathPoints.add(home);
 
         Map<String, Object> data = new LinkedHashMap<>();
-        data.put("planned_path_points", List.of(pathPoint));
+        data.put("planned_path_points", pathPoints);
         data.put("last_point_type", 0);
         data.put("flight_id", currentFlightId != null ? currentFlightId : "");
 
@@ -530,10 +607,12 @@ public class WaylineTaskSimulator {
     private void publishEvent(String method, Map<String, Object> data) {
         Map<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("bid", UUID.randomUUID().toString());
-        envelope.put("data", data);
         envelope.put("tid", UUID.randomUUID().toString());
         envelope.put("timestamp", System.currentTimeMillis());
+        envelope.put("need_reply", 0);
+        envelope.put("gateway", runtimeConfig.getDockSn());
         envelope.put("method", method);
+        envelope.put("data", data);
 
         String topic = TopicConstants.topic(TopicConstants.EVENTS, runtimeConfig.getDockSn());
         mqtt.publishJson(topic, envelope);

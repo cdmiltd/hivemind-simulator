@@ -21,6 +21,7 @@ import ltd.cdmi.hivemind.simulator.config.RuntimeConfig;
 import ltd.cdmi.hivemind.simulator.config.SimulatorProperties;
 import ltd.cdmi.hivemind.simulator.device.DeviceState;
 import ltd.cdmi.hivemind.simulator.device.DockOnlineService;
+import ltd.cdmi.hivemind.simulator.device.PilotOnlineService;
 import ltd.cdmi.hivemind.simulator.diagnostic.CoverageRecorder;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
 import ltd.cdmi.hivemind.simulator.handler.FfmpegInstaller;
@@ -63,6 +64,7 @@ class LocationSimulatorTest {
     private SimulatorController newController(RuntimeConfig runtimeConfig, DeviceState state) {
         return new SimulatorController(
                 Mockito.mock(DockOnlineService.class),
+                Mockito.mock(PilotOnlineService.class),
                 state,
                 Mockito.mock(MqttClientManager.class),
                 Mockito.mock(WaylineTaskSimulator.class),

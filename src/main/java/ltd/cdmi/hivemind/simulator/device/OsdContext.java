@@ -42,9 +42,6 @@ public class OsdContext {
     public RuntimeConfig getRuntimeConfig() { return runtimeConfig; }
     public OsdStrategy getStrategy() { return strategy; }
 
-    /** 当前机场类型 */
-    public DeviceType getDockType() { return runtimeConfig.getDockType(); }
-
     /** 当前飞行器类型 */
     public DeviceType getDroneType() { return runtimeConfig.getDroneType(); }
 

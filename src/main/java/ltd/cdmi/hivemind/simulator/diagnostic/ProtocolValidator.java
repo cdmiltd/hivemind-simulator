@@ -21,7 +21,10 @@ import com.fasterxml.jackson.databind.JsonMappingException;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * 协议校验引擎：校验 MQTT 消息的协议合规性，区分平台错误与模拟器问题。
@@ -116,6 +119,107 @@ public final class ProtocolValidator {
         }
         // NPE/ClassCastException 等运行时异常归为模拟器 Bug
         return DiagnosticCode.SIMULATOR_PARSE_BUG;
+    }
+
+    // ==================== 负载控制枚举校验 ====================
+
+    /** camera_type 枚举值（含红外）：ir, wide, zoom */
+    private static final Set<String> CAMERA_TYPES_FULL = Set.of("ir", "wide", "zoom");
+
+    /** camera_type 枚举值（仅可见光，曝光/对焦类指令不支持红外镜头）：wide, zoom */
+    private static final Set<String> CAMERA_TYPES_VISIBLE = Set.of("wide", "zoom");
+
+    /** exposure_value 枚举值：1~31 + 255（FIXED），DJI 文档 enum_string 类型 */
+    private static final Set<String> EXPOSURE_VALUES;
+    static {
+        Set<String> vals = new HashSet<>();
+        for (int i = 1; i <= 31; i++) {
+            vals.add(String.valueOf(i));
+        }
+        vals.add("255");
+        EXPOSURE_VALUES = Collections.unmodifiableSet(vals);
+    }
+
+    /**
+     * 校验负载控制指令的枚举值是否合法。
+     * <p>依据 DJI Cloud API 文档各指令的枚举约束，校验平台下发的值是否在合法范围内。
+     * 字段缺失时跳过（由 P-6 必填字段校验处理）。
+     * @param method 指令方法名
+     * @param data 指令 data 节点
+     * @return null=校验通过或该指令无枚举校验；DiagnosticCode.P-10=存在非法枚举值
+     */
+    public static DiagnosticCode validatePayloadEnum(String method, JsonNode data) {
+        switch (method) {
+            case "camera_frame_zoom" -> {
+                if (!isValidString(data, "camera_type", CAMERA_TYPES_FULL)) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+            }
+            case "camera_mode_switch" -> {
+                if (!isValidInt(data, "camera_mode", Set.of(0, 1, 2, 3))) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+            }
+            case "camera_aim" -> {
+                if (!isValidString(data, "camera_type", CAMERA_TYPES_FULL)) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+            }
+            case "camera_focal_length_set" -> {
+                if (!isValidString(data, "camera_type", CAMERA_TYPES_FULL)) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+            }
+            case "gimbal_reset" -> {
+                if (!isValidInt(data, "reset_mode", Set.of(0, 1, 2, 3))) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+            }
+            case "photo_storage_set" -> {
+                if (!isValidStringArray(data, "photo_storage_settings", Set.of("current", "vision", "ir"))) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+            }
+            case "video_storage_set" -> {
+                if (!isValidStringArray(data, "video_storage_settings", Set.of("current", "wide", "zoom", "ir"))) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+            }
+            case "camera_exposure_mode_set" -> {
+                if (!isValidString(data, "camera_type", CAMERA_TYPES_VISIBLE)) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+                if (!isValidInt(data, "exposure_mode", Set.of(1, 2, 3, 4))) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+            }
+            case "camera_exposure_set" -> {
+                if (!isValidString(data, "camera_type", CAMERA_TYPES_VISIBLE)) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+                if (!isValidString(data, "exposure_value", EXPOSURE_VALUES)) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+            }
+            case "camera_focus_mode_set" -> {
+                if (!isValidString(data, "camera_type", CAMERA_TYPES_VISIBLE)) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+                if (!isValidInt(data, "focus_mode", Set.of(0, 1, 2))) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+            }
+            case "camera_focus_value_set" -> {
+                if (!isValidString(data, "camera_type", CAMERA_TYPES_VISIBLE)) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+            }
+            case "camera_point_focus_action" -> {
+                if (!isValidString(data, "camera_type", CAMERA_TYPES_VISIBLE)) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+            }
+            case "ir_metering_mode_set" -> {
+                if (!isValidInt(data, "mode", Set.of(0, 1, 2))) return DiagnosticCode.PLATFORM_INVALID_ENUM;
+            }
+            // 以下指令无枚举值需校验：camera_photo_take, camera_photo_stop,
+            // camera_recording_start, camera_recording_stop, camera_screen_drag,
+            // camera_look_at, camera_screen_split, ir_metering_point_set, ir_metering_area_set
+        }
+        return null;
+    }
+
+    /** 校验字符串字段值是否在合法枚举范围内。字段缺失时跳过（由 P-6 处理）。 */
+    private static boolean isValidString(JsonNode data, String field, Set<String> valid) {
+        if (!data.has(field)) return true;
+        return valid.contains(data.path(field).asText());
+    }
+
+    /** 校验整数字段值是否在合法枚举范围内。字段缺失时跳过（由 P-6 处理）。 */
+    private static boolean isValidInt(JsonNode data, String field, Set<Integer> valid) {
+        if (!data.has(field)) return true;
+        return valid.contains(data.path(field).asInt());
+    }
+
+    /** 校验字符串数组字段的所有元素是否在合法枚举范围内。字段缺失或非数组时跳过。 */
+    private static boolean isValidStringArray(JsonNode data, String field, Set<String> valid) {
+        if (!data.has(field)) return true;
+        JsonNode arr = data.path(field);
+        if (!arr.isArray()) return true; // 非数组由 P-7 字段类型校验处理
+        for (JsonNode item : arr) {
+            if (!valid.contains(item.asText())) return false;
+        }
+        return true;
     }
 
     /**

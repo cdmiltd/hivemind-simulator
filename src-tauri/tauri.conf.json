@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "DJI Dock Simulator",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "identifier": "com.cdmi.dock-simulator",
   "build": {},
   "app": {
@@ -30,13 +30,14 @@
       "icons/icon.ico"
     ],
     "resources": {
-      "../target/dji-dock-simulator-1.0.0.jar": "app.jar",
+      "../target/dji-dock-simulator-1.1.0.jar": "app.jar",
       "../target/runtime/": "runtime/"
     },
     "windows": {
       "nsis": {
         "installerIcon": "icons/icon.ico",
-        "installMode": "perMachine"
+        "installMode": "perMachine",
+        "installerHooks": "nsis-hooks.nsh"
       },
       "webviewInstallMode": {
         "type": "downloadBootstrapper"

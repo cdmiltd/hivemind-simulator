@@ -15,6 +15,7 @@
 
 package ltd.cdmi.hivemind.simulator.config;
 
+import ltd.cdmi.hivemind.simulator.device.DeviceMode;
 import ltd.cdmi.hivemind.simulator.device.DeviceType;
 import org.springframework.stereotype.Component;
 
@@ -41,6 +42,13 @@ public class RuntimeConfig {
     private volatile DeviceType droneType;
     private volatile String dockSn;
     private volatile String droneSn;
+
+    /** 设备接入模式（Dock to Cloud / Pilot to Cloud），默认 DOCK */
+    private volatile DeviceMode deviceMode;
+    /** Pilot 模式网关设备类型（遥控器），默认 RC_PLUS */
+    private volatile DeviceType controllerType;
+    /** Pilot 模式网关 SN，由 controllerType 决定，不可手动配置 */
+    private volatile String controllerSn;
 
     /** 直播推流配置（运行时可由前端覆盖，yml 提供默认值，LiveConfigStore 持久化恢复） */
     private volatile boolean liveRealPushEnabled;
@@ -70,6 +78,10 @@ public class RuntimeConfig {
         // SN 完全由设备型号决定，不可手动配置
         this.dockSn = this.dockType.defaultSn();
         this.droneSn = this.droneType.defaultSn();
+        // Pilot 模式默认配置（仅 deviceMode=PILOT 时生效）
+        this.deviceMode = DeviceMode.DOCK;          // 默认 Dock 模式
+        this.controllerType = DeviceType.RC_PLUS;   // 默认遥控器型号，用户可在注册时切换
+        this.controllerSn = this.controllerType.defaultSn();
         this.liveConfigStore = liveConfigStore;
 
         // yml 提供默认值
@@ -138,14 +150,48 @@ public class RuntimeConfig {
     public void setAppLicense(String appLicense) { this.appLicense = appLicense; }
 
     public DeviceType getDockType() { return dockType; }
-    public void setDockType(DeviceType dockType) { this.dockType = dockType; }
+    public void setDockType(DeviceType dockType) {
+        this.dockType = dockType;
+        this.dockSn = dockType.defaultSn();
+    }
 
     public DeviceType getDroneType() { return droneType; }
-    public void setDroneType(DeviceType droneType) { this.droneType = droneType; }
+    public void setDroneType(DeviceType droneType) {
+        this.droneType = droneType;
+        this.droneSn = droneType.defaultSn();
+    }
 
     public String getDockSn() { return dockSn; }
 
     public String getDroneSn() { return droneSn; }
+
+    public DeviceMode getDeviceMode() { return deviceMode; }
+    public void setDeviceMode(DeviceMode deviceMode) { this.deviceMode = deviceMode; }
+
+    public DeviceType getControllerType() { return controllerType; }
+    public void setControllerType(DeviceType controllerType) {
+        this.controllerType = controllerType;
+        this.controllerSn = controllerType.defaultSn();
+    }
+
+    public String getControllerSn() { return controllerSn; }
+
+    /**
+     * 获取当前模式的网关 SN。
+     * <p>Dock 模式返回 dockSn，Pilot 模式返回 controllerSn。
+     * <p>供 MQTT topic 构造、update_topo 等场景使用，避免调用方关心当前模式。
+     */
+    public String getGatewaySn() {
+        return deviceMode == DeviceMode.PILOT ? controllerSn : dockSn;
+    }
+
+    /**
+     * 获取当前模式的网关设备类型。
+     * <p>Dock 模式返回 dockType，Pilot 模式返回 controllerType。
+     */
+    public DeviceType getGatewayType() {
+        return deviceMode == DeviceMode.PILOT ? controllerType : dockType;
+    }
 
     public boolean isLiveRealPushEnabled() { return liveRealPushEnabled; }
     public void setLiveRealPushEnabled(boolean liveRealPushEnabled) { this.liveRealPushEnabled = liveRealPushEnabled; }

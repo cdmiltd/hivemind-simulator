@@ -21,6 +21,7 @@ import ltd.cdmi.hivemind.simulator.config.RuntimeConfig;
 import ltd.cdmi.hivemind.simulator.config.SimulatorProperties;
 import ltd.cdmi.hivemind.simulator.device.DeviceState;
 import ltd.cdmi.hivemind.simulator.device.DeviceType;
+import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticCode;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
 import ltd.cdmi.hivemind.simulator.handler.MediaUploadSimulator;
 import ltd.cdmi.hivemind.simulator.handler.ServiceCommandHandler;
@@ -433,10 +434,13 @@ class WaylineTaskSimulatorTest {
         JsonNode node = objectMapper.readTree(objectMapper.writeValueAsString(envelope));
 
         assertEquals("return_home_info", node.path("method").asText());
-        JsonNode pathPoint = node.path("data").path("planned_path_points").get(0);
-        assertEquals(31.23, pathPoint.path("latitude").asDouble());
-        assertEquals(121.47, pathPoint.path("longitude").asDouble());
-        assertEquals(10.0, pathPoint.path("height").asDouble());
+        // 返航轨迹：drone 当前位置 → (可选上升点) → 机场位置
+        // 最后一个点为机场位置
+        JsonNode pathPoints = node.path("data").path("planned_path_points");
+        JsonNode lastPoint = pathPoints.get(pathPoints.size() - 1);
+        assertEquals(31.23, lastPoint.path("latitude").asDouble());
+        assertEquals(121.47, lastPoint.path("longitude").asDouble());
+        assertEquals(10.0, lastPoint.path("height").asDouble());
         assertEquals("FLIGHT-HOME-001", node.path("data").path("flight_id").asText());
     }
 
@@ -530,5 +534,117 @@ class WaylineTaskSimulatorTest {
         assertEquals(0.0, state.getDroneHeight());
         assertEquals(0, state.getDroneModeCode());
         assertTrue(state.isDroneInDock());
+    }
+
+    // ==================== TC-LOC-016：return_home 后无人机位置更新到机场 ====================
+
+    /**
+     * return_home 指令立即设置 mode_code=9（自动返航），并调度延迟任务更新位置。
+     */
+    @SuppressWarnings("unchecked")
+    @Test
+    void returnHomeSetsReturnModeImmediately() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        DeviceState state = new DeviceState();
+        // 模拟飞行中状态
+        state.setDroneLatitude(31.0);
+        state.setDroneLongitude(122.0);
+        state.setDroneHeight(80.0);
+        state.setDroneModeCode(5);
+
+        MqttClientManager mqtt = Mockito.mock(MqttClientManager.class);
+        ServiceCommandHandler commandHandler = Mockito.mock(ServiceCommandHandler.class);
+        MediaUploadSimulator mediaUpload = Mockito.mock(MediaUploadSimulator.class);
+        DiagnosticLogRecorder recorder = diagnosticRecorder();
+
+        WaylineTaskSimulator simulator = new WaylineTaskSimulator(
+                testProps(), mqtt, state, objectMapper, commandHandler, mediaUpload,
+                runtimeConfig(DeviceType.DOCK3), recorder);
+
+        Field flightIdField = WaylineTaskSimulator.class.getDeclaredField("currentFlightId");
+        flightIdField.setAccessible(true);
+        flightIdField.set(simulator, "FLIGHT-RTH-001");
+
+        Map<String, Object> result = invokeCommand(simulator, "return_home", null);
+
+        // services_reply result=0
+        assertEquals(0, result.get("result"));
+        // 立即进入返航模式
+        assertEquals(9, state.getDroneModeCode());
+        // 位置尚未更新（仍在飞行中位置）
+        assertEquals(31.0, state.getDroneLatitude());
+        assertEquals(122.0, state.getDroneLongitude());
+        // M-2：return_home 后续行为（不发 return_home_info、无进度上报）未确认，记录诊断日志
+        Mockito.verify(recorder).record(Mockito.eq(DiagnosticCode.MONITOR_SIMULATOR_INFERENCE),
+                Mockito.eq("return_home"), Mockito.contains("return_home"));
+    }
+
+    /**
+     * 返航完成后（completeReturnHome）无人机位置更新到机场，mode_code=0, droneInDock=true。
+     */
+    @Test
+    void returnHomeCompletesWithDroneAtAirport() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        DeviceState state = new DeviceState();
+        // 模拟飞行中位置（偏离机场）
+        state.setDroneLatitude(31.0);
+        state.setDroneLongitude(122.0);
+        state.setDroneHeight(80.0);
+        state.setDroneModeCode(9); // 返航中
+
+        MqttClientManager mqtt = Mockito.mock(MqttClientManager.class);
+        ServiceCommandHandler commandHandler = Mockito.mock(ServiceCommandHandler.class);
+        MediaUploadSimulator mediaUpload = Mockito.mock(MediaUploadSimulator.class);
+
+        WaylineTaskSimulator simulator = new WaylineTaskSimulator(
+                testProps(), mqtt, state, objectMapper, commandHandler, mediaUpload,
+                runtimeConfig(DeviceType.DOCK3), diagnosticRecorder());
+
+        Field flightIdField = WaylineTaskSimulator.class.getDeclaredField("currentFlightId");
+        flightIdField.setAccessible(true);
+        flightIdField.set(simulator, "FLIGHT-RTH-002");
+
+        Method m = WaylineTaskSimulator.class.getDeclaredMethod("completeReturnHome");
+        m.setAccessible(true);
+        m.invoke(simulator);
+
+        // 无人机位置更新到机场
+        assertEquals(30.67, state.getDroneLatitude());
+        assertEquals(104.07, state.getDroneLongitude());
+        assertEquals(0.0, state.getDroneHeight());
+        assertEquals(0, state.getDroneModeCode());
+        assertTrue(state.isDroneInDock());
+    }
+
+    /**
+     * return_home_cancel 取消返航延迟任务，无人机位置不变。
+     */
+    @Test
+    void returnHomeCancelStopsPositionUpdate() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper();
+        DeviceState state = new DeviceState();
+        state.setDroneLatitude(31.0);
+        state.setDroneLongitude(122.0);
+        state.setDroneHeight(80.0);
+        state.setDroneModeCode(9);
+
+        MqttClientManager mqtt = Mockito.mock(MqttClientManager.class);
+        ServiceCommandHandler commandHandler = Mockito.mock(ServiceCommandHandler.class);
+        MediaUploadSimulator mediaUpload = Mockito.mock(MediaUploadSimulator.class);
+
+        WaylineTaskSimulator simulator = new WaylineTaskSimulator(
+                testProps(), mqtt, state, objectMapper, commandHandler, mediaUpload,
+                runtimeConfig(DeviceType.DOCK3), diagnosticRecorder());
+
+        // 先触发 return_home 调度延迟任务
+        invokeCommand(simulator, "return_home", null);
+        // 再取消返航
+        Map<String, Object> result = invokeCommand(simulator, "return_home_cancel", null);
+
+        assertEquals(0, result.get("result"));
+        // 位置不应改变（仍在当前位置）
+        assertEquals(31.0, state.getDroneLatitude());
+        assertEquals(122.0, state.getDroneLongitude());
+        assertEquals(80.0, state.getDroneHeight());
     }
 }

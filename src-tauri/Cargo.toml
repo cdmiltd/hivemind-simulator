@@ -1,6 +1,6 @@
 [package]
 name = "dji-dock-simulator"
-version = "1.0.0"
+version = "1.1.0"
 description = "DJI Dock 机场模拟器桌面应用"
 edition = "2021"
 

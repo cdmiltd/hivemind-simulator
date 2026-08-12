@@ -15,8 +15,6 @@
 
 package ltd.cdmi.hivemind.simulator.device;
 
-import java.util.List;
-
 /**
  * DJI Cloud API 设备类型枚举。
  * <p>封装 (domain, type, sub_type) 三元组，提供类型安全的设备型号管理。
@@ -29,13 +27,27 @@ public enum DeviceType {
     DOCK2(3, 2, 0, "大疆机场2", "Dock2",  "2UUXN1Q00A002W"),
     DOCK3(3, 3, 0, "大疆机场3", "Dock3",  "7UUXN1Q00A008W"),
 
+    // 遥控器 (domain=2) — Pilot to Cloud 网关设备
+    RC_PLUS  (2, 119, 0, "DJI RC Plus",        "RC Plus",    "1581F5RCD001001"),
+    RC_PLUS_2(2, 174, 0, "DJI RC Plus 2",      "RC Plus 2",  "1581F5RCD002001"),
+    RC_PRO   (2, 144, 0, "DJI RC Pro 行业版",  "RC Pro",     "1581F5RCD003001"),
+
     // 飞行器 (domain=0)
     M30 (0, 67,  0, "Matrice 30",  "M30",  "1581F4HBD12340010101"),
     M30T(0, 67,  1, "Matrice 30T", "M30T", "1581F4HBD12340010201"),
     M3D (0, 91,  0, "Matrice 3D",  "M3D",  "1581F6HGD23110010101"),
     M3TD(0, 91,  1, "Matrice 3TD", "M3TD", "1581F6HGD23110010201"),
     M4D (0, 100, 0, "Matrice 4D",  "M4D",  "1081F8HGD25110010001"),
-    M4TD(0, 100, 1, "Matrice 4TD", "M4TD", "1081F8HGD25110010059");
+    M4TD(0, 100, 1, "Matrice 4TD", "M4TD", "1081F8HGD25110010059"),
+
+    // Pilot 飞行器 (domain=0) — 仅 Pilot 模式使用，Dock 不支持
+    M350_RTK(0, 89,  0, "Matrice 350 RTK",  "M350 RTK",  "1581F4HBD89110101"),
+    M300_RTK(0, 60,  0, "Matrice 300 RTK",  "M300 RTK",  "1581F4HBD60110101"),
+    MAVIC_3E(0, 77,  0, "Mavic 3E",         "Mavic 3E",  "1581F4HBD77110101"),
+    MAVIC_3T(0, 77,  1, "Mavic 3T",         "Mavic 3T",  "1581F4HBD77110201"),
+    M400    (0, 103, 0, "Matrice 400",      "M400",      "1581F4HBD03110101"),
+    M4E     (0, 99,  0, "DJI Matrice 4E",   "M4E",       "1581F8HGD99110101"),
+    M4T     (0, 99,  1, "DJI Matrice 4T",   "M4T",       "1581F8HGD99110201");
 
     private final int domain;
     private final int type;
@@ -72,31 +84,8 @@ public enum DeviceType {
     }
 
     public boolean isDock() { return domain == 3; }
+    public boolean isController() { return domain == 2; }
     public boolean isAircraft() { return domain == 0; }
-
-    /** 从 model_key 字符串解析设备类型，如 "3-3-0" → DOCK3 */
-    public static DeviceType fromModelKey(String modelKey) {
-        if (modelKey == null || modelKey.isBlank()) {
-            throw new IllegalArgumentException("model_key 不能为空");
-        }
-        String[] parts = modelKey.split("-");
-        if (parts.length != 3) {
-            throw new IllegalArgumentException("model_key 格式错误: " + modelKey + "，期望: domain-type-subType");
-        }
-        try {
-            int d = Integer.parseInt(parts[0].trim());
-            int t = Integer.parseInt(parts[1].trim());
-            int s = Integer.parseInt(parts[2].trim());
-            for (DeviceType dt : values()) {
-                if (dt.domain == d && dt.type == t && dt.subType == s) {
-                    return dt;
-                }
-            }
-            throw new IllegalArgumentException("不支持的设备类型: " + modelKey);
-        } catch (NumberFormatException e) {
-            throw new IllegalArgumentException("model_key 格式错误: " + modelKey, e);
-        }
-    }
 
     /** 按 type 查找机场类型（用于 MonitorService 解析网关类型） */
     public static DeviceType fromDockType(int type) {
@@ -116,29 +105,5 @@ public enum DeviceType {
             }
         }
         return null;
-    }
-
-    /** 机场与飞行器兼容性校验 */
-    public static boolean isCompatible(DeviceType dock, DeviceType drone) {
-        if (dock == null || !dock.isDock() || drone == null || !drone.isAircraft()) {
-            return false;
-        }
-        return switch (dock) {
-            case DOCK1 -> drone == M30 || drone == M30T;
-            case DOCK2 -> drone == M3D || drone == M3TD;
-            case DOCK3 -> drone == M4D || drone == M4TD;
-            default -> false;
-        };
-    }
-
-    /** 获取机场兼容的飞行器列表 */
-    public List<DeviceType> getCompatibleAircraft() {
-        if (!isDock()) return List.of();
-        return switch (this) {
-            case DOCK1 -> List.of(M30, M30T);
-            case DOCK2 -> List.of(M3D, M3TD);
-            case DOCK3 -> List.of(M4D, M4TD);
-            default -> List.of();
-        };
     }
 }

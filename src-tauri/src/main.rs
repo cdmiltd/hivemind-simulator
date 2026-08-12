@@ -231,9 +231,15 @@ fn main() {
             }
             if let Some(ref mut f) = log { let _ = f.flush(); }
 
-            // 后端就绪后显示窗口
+            // 后端就绪后显示窗口，并强制重新导航到后端 URL
+            // 原因：Tauri 在 setup 回调前就已创建 webview 并加载 url，此时后端未启动导致加载失败页面
+            // window.show() 时用户会看到残留的失败页面，需重新导航确保加载后端页面
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
+                let _ = window.eval(&format!(
+                    "window.location.replace('http://127.0.0.1:{}');",
+                    SERVER_PORT
+                ));
             }
 
             Ok(())

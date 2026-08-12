@@ -180,7 +180,12 @@ hivemind 是无人机自主作业平台，已通过 `adapter-drone` 模块按 DJ
    └─ Topic: thing/product/{gateway_sn}/services_reply    Method: 同上
       返回字段: data.result
 
-5. 退出指令飞行模式
+5. flyto 目标点停止/更新（同步，无进度事件）
+   ├─ Topic: thing/product/{gateway_sn}/services         Method: fly_to_point_stop / fly_to_point_update
+   └─ Topic: thing/product/{gateway_sn}/services_reply    Method: 同上
+      返回字段: data.result
+
+6. 退出指令飞行模式
    ├─ Topic: thing/product/{gateway_sn}/services         Method: drc_mode_exit
    └─ Topic: thing/product/{gateway_sn}/services_reply    Method: drc_mode_exit
       返回字段: data.result
@@ -361,7 +366,9 @@ hivemind 是无人机自主作业平台，已通过 `adapter-drone` 模块按 DJ
 - **Topic**：osd/state/services/services_reply/events/events_reply/requests/requests_reply/status/status_reply/property/set/property/set_reply
 - **Requests 上行**：config（获取配置）、airport_bind_status、airport_organization_get、airport_organization_bind、storage_config_get、flighttask_resource_get、flighttask_progress_get
 - **Events 上行**：flighttask_ready、flighttask_progress、return_home_info、file_upload_callback、device_exit_homing_notify、highest_priority_upload_flighttask_media、in_flight_wayline_progress、fly_to_point_progress、takeoff_to_point_progress、obstacle_avoidance_notify（仅 Dock3）、joystick_invalid_notify、camera_photo_take_progress、poi_status_notify（仅 Dock1）、远程调试 Job 进度事件（cover_open/close/force_close、drone_open/close、charge_open/close、device_reboot、device_format、drone_format、esim_activate/operator_switch、rtk_calibration）
-- **Services 下行**：flighttask_prepare、flighttask_execute、flighttask_pause、flighttask_recovery、flighttask_undo、flighttask_stop、return_home、return_home_cancel、return_specific_home、live_start_push、live_stop_push、live_set_quality、live_camera_change、live_lens_change、in_flight_wayline_deliver/stop/recover/cancel、upload_flighttask_media_prioritize、drc_mode_enter、drc_mode_exit、takeoff_to_point、fly_to_point、flight_authority_grab、payload_authority_grab、远程调试指令（cover_open/close/force_close、drone_open/close、charge_open/close、device_reboot、device_format、drone_format、debug_mode_open/close、supplement_light_open/close、battery_maintenance/store_mode_switch、alarm_state_switch、air_conditioner_mode_switch、sdr_workmode_switch、sim_slot_switch、esim_activate/operator_switch、rtk_calibration、putter_open/close（仅 Dock1））
+- **Services 下行**：flighttask_prepare、flighttask_execute、flighttask_pause、flighttask_recovery、flighttask_undo、flighttask_stop、return_home、return_home_cancel、return_specific_home、live_start_push、live_stop_push、live_set_quality、live_camera_change、live_lens_change、in_flight_wayline_deliver/stop/recover/cancel、upload_flighttask_media_prioritize、drc_mode_enter、drc_mode_exit、takeoff_to_point、fly_to_point、fly_to_point_stop、fly_to_point_update、flight_authority_grab、payload_authority_grab、负载控制指令（camera_frame_zoom、camera_mode_switch、camera_photo_take、camera_photo_stop、camera_recording_start、camera_recording_stop、camera_screen_drag、camera_aim、camera_focal_length_set、gimbal_reset、camera_look_at、camera_screen_split、photo_storage_set、video_storage_set、camera_exposure_mode_set、camera_exposure_set、camera_focus_mode_set、camera_focus_value_set、camera_point_focus_action、ir_metering_mode_set、ir_metering_point_set、ir_metering_area_set）、远程调试指令（cover_open/close/force_close、drone_open/close、charge_open/close、device_reboot、device_format、drone_format、debug_mode_open/close、supplement_light_open/close、battery_maintenance/store_mode_switch、alarm_state_switch、air_conditioner_mode_switch、sdr_workmode_switch、sim_slot_switch、esim_activate/operator_switch、rtk_calibration、putter_open/close（仅 Dock1））
+- **DRC 下行**（drc/down）：stick_control（杆量控制）、drone_control（已废弃，记录 P-9 诊断码）、drone_emergency_stop、drc_force_landing、drc_emergency_landing、drc_camera_night_mode_set、drc_camera_denoise_level_set、drc_camera_night_vision_enable、drc_infrared_fill_light_enable、drc_light_brightness_set、drc_light_mode_set、drc_light_fine_tuning_set、drc_light_calibration、drc_speaker_play_mode_set、drc_speaker_tts_set、drc_speaker_play_volume_set、drc_speaker_play_stop、drc_speaker_replay、heart_beat
+- **DRC 上行**（drc/up）：hsi_info_push（避障信息）、delay_info_push（图传延时）、osd_info_push（高频 OSD）、drc_drone_state_push、drc_camera_state_push、drc_camera_osd_info_push、drc_psdk_floating_window_text、drc_psdk_state_info、drc_psdk_ui_resource、drc_ai_info_push、drc_speaker_play_progress
 - **OSD**：mode_code、cover_state、putter_state、drone_in_dock、drone_charge_state、electric_supply_voltage、temperature、humidity、wind_speed、rainfall、latitude/longitude/height、storage、position_state、backup_battery、network_state、wireless_link、sub_device 等
 
 ## 7. 配置（application.yml）
@@ -419,6 +426,7 @@ server:
 | P-6 | 必填字段缺失 | 缺 tid/bid/method/data | 阶段 2 |
 | P-7 | 字段类型错误 | method 非字符串、data 非对象等 | 阶段 2 |
 | P-8 | Dock 能力不匹配 | 平台给当前 Dock 下发了不支持的指令 | 阶段 2 |
+| P-9 | 平台调用废弃接口 | 平台下发了 DJI 已废弃的下行接口（如 drone_control） | 阶段 2 |
 
 ### 8.3 S 类（模拟器问题，需开发者处理）
 

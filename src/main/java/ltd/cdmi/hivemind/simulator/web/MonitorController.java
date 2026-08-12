@@ -15,6 +15,10 @@
 
 package ltd.cdmi.hivemind.simulator.web;
 
+import ltd.cdmi.hivemind.simulator.config.RuntimeConfig;
+import ltd.cdmi.hivemind.simulator.device.DeviceMode;
+import ltd.cdmi.hivemind.simulator.device.DockOnlineService;
+import ltd.cdmi.hivemind.simulator.device.PilotOnlineService;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticCode;
 import ltd.cdmi.hivemind.simulator.mqtt.MonitorService;
 import org.springframework.web.bind.annotation.*;
@@ -30,9 +34,18 @@ import java.util.*;
 public class MonitorController {
 
     private final MonitorService monitorService;
+    private final DockOnlineService dockOnlineService;
+    private final PilotOnlineService pilotOnlineService;
+    private final RuntimeConfig runtimeConfig;
 
-    public MonitorController(MonitorService monitorService) {
+    public MonitorController(MonitorService monitorService,
+                             DockOnlineService dockOnlineService,
+                             PilotOnlineService pilotOnlineService,
+                             RuntimeConfig runtimeConfig) {
         this.monitorService = monitorService;
+        this.dockOnlineService = dockOnlineService;
+        this.pilotOnlineService = pilotOnlineService;
+        this.runtimeConfig = runtimeConfig;
     }
 
     /** 连接到第三方平台 MQTT */
@@ -44,6 +57,15 @@ public class MonitorController {
         String password = String.valueOf(body.getOrDefault("password", ""));
 
         DiagnosticCode code = monitorService.connect(host, port, username, password);
+        // 连接成功后，如果模拟器设备已在线，重发 update_topo 供监控器发现设备
+        // （监控器后连接时可能错过之前的 update_topo，重发一次获取完整设备拓扑）
+        if (code == null) {
+            if (runtimeConfig.getDeviceMode() == DeviceMode.PILOT) {
+                pilotOnlineService.resendTopo();
+            } else {
+                dockOnlineService.resendTopo();
+            }
+        }
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("success", code == null);
         result.put("code", code != null ? code.code() : "0");

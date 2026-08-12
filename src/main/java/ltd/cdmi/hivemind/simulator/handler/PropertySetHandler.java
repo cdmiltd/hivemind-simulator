@@ -20,6 +20,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import ltd.cdmi.hivemind.simulator.config.RuntimeConfig;
 import ltd.cdmi.hivemind.simulator.config.SimulatorProperties;
 import ltd.cdmi.hivemind.simulator.device.DeviceState;
+import ltd.cdmi.hivemind.simulator.device.DeviceType;
 import ltd.cdmi.hivemind.simulator.diagnostic.CoverageRecorder;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticCode;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
@@ -70,6 +71,13 @@ public class PropertySetHandler {
         String dockSn = runtimeConfig.getDockSn();
         mqtt.addListener(TopicConstants.topic(TopicConstants.PROPERTY_SET, dockSn), this::handlePropertySet);
         log.info("PropertySetHandler 已注册监听: {}", TopicConstants.topic(TopicConstants.PROPERTY_SET, dockSn));
+
+        // M-2 诊断日志：标量属性 set_reply 格式为推断（DJI 文档示例仅展示 struct 属性）
+        String inference = "标量属性 set_reply 格式 {\"属性名\": {\"result\": 0}}：DJI 文档 property/set_reply 示例仅展示 struct 属性"
+            + "（如 distance_limit_status.state → {\"result\": 0}），未明确标量属性（如 silent_mode）的 set_reply 格式。"
+            + "模拟器按 struct 属性的叶子字段包 result 的逻辑推断标量属性同样包 result，待真机验证";
+        diagnosticRecorder.record(DiagnosticCode.MONITOR_SIMULATOR_INFERENCE, "property_set_reply_scalar", inference);
+        log.warn("[M-2] 标量属性 set_reply 格式为推断（DJI 文档仅展示 struct 属性示例），待真机验证");
     }
 
     private void handlePropertySet(String topic, String payload) {
@@ -89,27 +97,35 @@ public class PropertySetHandler {
             // 覆盖率统计：property/set 无 method 字段，统一记 "property_set"（按当前 MQTT 地址归档）
             coverageRecorder.record(runtimeConfig.getMqttHost() + ":" + runtimeConfig.getMqttPort(), "property_set");
 
-            // accessMode=rw 的属性：更新本地状态，下次 OSD 反映新值
+            // accessMode=rw 的属性：更新本地状态，下次 state topic 反映新值
             if (data.has("silent_mode")) {
                 int val = data.get("silent_mode").asInt();
                 state.setSilentMode(val);
                 log.info("属性设置 silent_mode={}", val);
             }
+            if (data.has("air_transfer_enable")) {
+                // air_transfer_enable 仅 Dock2/Dock3 支持（DJI 文档 Dock1 properties 列表无此字段）
+                // Dock1 收到此 set 仍回复 result=0 但不更新状态
+                if (runtimeConfig.getDockType() != DeviceType.DOCK1) {
+                    boolean val = data.get("air_transfer_enable").asBoolean();
+                    state.setAirTransferEnable(val);
+                    log.info("属性设置 air_transfer_enable={}", val);
+                } else {
+                    log.warn("Dock1 不支持 air_transfer_enable，忽略状态更新");
+                }
+            }
+            if (data.has("user_experience_improvement")) {
+                int val = data.get("user_experience_improvement").asInt();
+                state.setUserExperienceImprovement(val);
+                log.info("属性设置 user_experience_improvement={}", val);
+            }
             // accessMode=r 的属性（如 air_conditioner_state）：仅回复，不更新本地状态
 
-            // 回 property/set_reply：data 回显被设置的属性键值对（DJI Cloud API 协议）
-            // hivemind 据此确认属性设置成功；不应返回 {result:0} 这种 services 风格结构
-            Map<String, Object> replyData;
-            try {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> converted = objectMapper.convertValue(data, Map.class);
-                replyData = converted != null ? converted : new LinkedHashMap<>();
-            } catch (Exception ex) {
-                DiagnosticCode code = ProtocolValidator.classifyException(ex);
-                log.error("{} property/set 数据转换异常: {}", ProtocolValidator.logPrefix(code), ex.getMessage());
-                diagnosticRecorder.record(code, "property_set", "数据转换异常: " + ex.getMessage());
-                replyData = new LinkedHashMap<>();
-            }
+            // 回 property/set_reply：每个被设置的叶子字段用 {"result": 0} 替换原值（DJI Cloud API 协议）
+            // 对齐 DJI 文档示例：set {"distance_limit_status": {"state": 1}}
+            //   → set_reply {"distance_limit_status": {"state": {"result": 0}}}
+            // 标量属性：set {"silent_mode": 1} → set_reply {"silent_mode": {"result": 0}}
+            Map<String, Object> replyData = buildSetReplyData(data);
 
             Map<String, Object> reply = new LinkedHashMap<>();
             reply.put("tid", tid);
@@ -125,5 +141,33 @@ public class PropertySetHandler {
             log.error("{} 处理 property/set 失败: {}", ProtocolValidator.logPrefix(code), e.getMessage(), e);
             diagnosticRecorder.record(code, "property_set", "处理失败: " + e.getMessage());
         }
+    }
+
+    /**
+     * 构建 property/set_reply 的 data：每个被设置的叶子字段用 {"result": 0} 替换原值。
+     * <p>对齐 DJI Cloud API 文档示例：
+     * <pre>
+     * set:     {"distance_limit_status": {"state": 1}, "silent_mode": 1}
+     * reply:   {"distance_limit_status": {"state": {"result": 0}}, "silent_mode": {"result": 0}}
+     * </pre>
+     * struct 属性递归处理子字段，标量属性直接替换。
+     * </p>
+     */
+    private Map<String, Object> buildSetReplyData(JsonNode data) {
+        Map<String, Object> replyData = new LinkedHashMap<>();
+        data.fields().forEachRemaining(entry -> {
+            String key = entry.getKey();
+            JsonNode value = entry.getValue();
+            if (value.isObject()) {
+                // struct 属性：递归处理子字段
+                replyData.put(key, buildSetReplyData(value));
+            } else {
+                // 标量属性：替换为 {"result": 0}（0=成功）
+                Map<String, Object> result = new LinkedHashMap<>();
+                result.put("result", 0);
+                replyData.put(key, result);
+            }
+        });
+        return replyData;
     }
 }

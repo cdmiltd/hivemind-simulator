@@ -678,7 +678,7 @@
                 <el-button type="warning" :disabled="!canReturnHome" @click="sendFlightCmd('return_home')">返航</el-button>
             </div>
             <div class="ctrl-full" style="margin-top: 8px;">
-                <el-button :disabled="!canHover" @click="sendFlightCmd('hover')">悬停</el-button>
+                <el-button :disabled="!canHover" @click="sendFlightCmd('fly_to_point_stop')">悬停</el-button>
             </div>
         </div>
         <div class="ctrl-section">
@@ -707,11 +707,11 @@
         <div class="ctrl-section">
             <div class="ctrl-section-header">镜头控制</div>
             <div class="ctrl-full" style="margin-bottom: 8px;">
-                <el-button type="primary" :disabled="!droneConnected" @click="sendDockCmd('camera_photo_start')">拍照</el-button>
+                <el-button type="primary" :disabled="!droneConnected" @click="sendDockCmd('camera_photo_take')">拍照</el-button>
             </div>
             <div class="ctrl-grid">
-                <el-button :disabled="!droneConnected" @click="sendDockCmd('camera_video_start')">开始录像</el-button>
-                <el-button :disabled="!droneConnected" @click="sendDockCmd('camera_video_stop')">停止录像</el-button>
+                <el-button :disabled="!droneConnected" @click="sendDockCmd('camera_recording_start')">开始录像</el-button>
+                <el-button :disabled="!droneConnected" @click="sendDockCmd('camera_recording_stop')">停止录像</el-button>
             </div>
         </div>
         <div class="ctrl-section">
@@ -1010,7 +1010,7 @@ createApp({
         const chargeStateMap = {0:'未充电',1:'充电中',2:'充满'};
         const rtkStateMap = {0:'未定位',1:'GPS定位',2:'RTK固定解'};
         const netTypeMap = {0:'无网络',1:'4G',2:'5G',3:'以太网'};
-        const drcStateMap = {0:'空闲',1:'连接中',2:'已连接',3:'断开中'};
+        const drcStateMap = {0:'未连接',1:'连接中',2:'已连接',3:'断开中'};
 
         // 安全获取嵌套字段值
         function getPath(obj, path) {
@@ -1056,9 +1056,13 @@ createApp({
         // DRC OSD 关键参数
         const drcOsdItems = computed(() => {
             const o = drcOsd.value;
-            const dockDrcState = dockOsd.value?.drc_state;
-            const drcStateVal = o?.drc_state ?? dockDrcState;
+            // 与 drcState 优先级一致：优先 dockOsd（0.5HZ 定频，始终最新），回退 drcOsd
+            const drcStateVal = dockOsd.value?.drc_state ?? o?.drc_state;
             if (drcStateVal === undefined) return [];
+            // DRC 未连接时，只显示 DRC 状态，其他字段无意义
+            if (drcStateVal === 0) {
+                return [{ label: 'DRC状态', value: drcStateMap[0] ?? '未连接' }];
+            }
             const link = o ? (getPath(o, 'link_state') || {}) : {};
             return [
                 { label: 'DRC状态', value: drcStateMap[drcStateVal] ?? fmt(drcStateVal) },
@@ -1209,7 +1213,9 @@ createApp({
         async function refreshMonitorLogs() {
             const data = await fetchJSON('/api/monitor/logs');
             if (data && data.logs) {
-                logs.value = data.logs.map((l, i) => ({ ...l, id: i }));
+                // 防御：限制 logs 数组最大长度，避免后端配置变更或异常导致前端渲染过多 DOM
+                const sourceLogs = data.logs.length > 500 ? data.logs.slice(-500) : data.logs;
+                logs.value = sourceLogs.map((l, i) => ({ ...l, id: i }));
                 if (autoScroll.value) {
                     await nextTick();
                     scrollToBottom();

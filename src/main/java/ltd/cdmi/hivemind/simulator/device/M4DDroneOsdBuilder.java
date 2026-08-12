@@ -24,7 +24,9 @@ import java.util.Map;
 
 /**
  * M4D/M4TD 飞行器 OSD 字段集构造器。
- * <p>M4D 家族特有字段：cameras 数组、type_subtype_gimbalindex（云台姿态+红外测温）、wireless_link_topo。</p>
+ * <p>M4D 家族特有字段：cameras 数组、type_subtype_gimbalindex（云台姿态+激光测距+红外测温）。</p>
+ * <p>is_near_area_limit/is_near_height_limit 已提升到基类（M30/M3D/M4D 共有）。</p>
+ * <p>wireless_link_topo（pushMode=1）在 state topic 上报，不在 OSD，由 DockOnlineService.publishDroneState() 推送。</p>
  * <p>红外字段（thermal_gain_mode/thermal_isotherm_state 等）按 {@link OsdContext#isThermal()} 条件上报：
  * M4TD（sub_type=1）上报，M4D（sub_type=0）不上报，避免平台解析异常。</p>
  * <p>参考：<a href="https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/aircraft/m4d-properties.html">M4D/M4TD properties</a></p>
@@ -47,49 +49,32 @@ public class M4DDroneOsdBuilder extends AbstractDroneOsdBuilder {
         OsdStrategy s = ctx.getStrategy();
         data.put(s.convertKey("cameras"), buildCameras(ctx));
         data.put(s.convertKey("type_subtype_gimbalindex"), buildGimbalInfo(ctx));
-        data.put(s.convertKey("wireless_link_topo"), buildWirelessLinkTopo(s));
+        // is_near_area_limit / is_near_height_limit 已提升到基类（M30/M3D/M4D 共有）
+        // wireless_link_topo（pushMode=1）不在 OSD，由 publishDroneState() 在 state topic 推送
     }
 
     /**
-     * 构造 cameras 数组（飞行器相机信息）。
-     * <p>红外相关字段（ir_zoom_factor/ir_metering_mode 等）按 {@link OsdContext#isThermal()} 条件上报。</p>
-     */
-    private List<Map<String, Object>> buildCameras(OsdContext ctx) {
-        OsdStrategy s = ctx.getStrategy();
-        PayloadType camera = PayloadType.defaultCameraFor(ctx.getDroneType());
-        List<Map<String, Object>> list = new ArrayList<>();
-        Map<String, Object> cam = new LinkedHashMap<>();
-        cam.put(s.convertKey("payload_index"), camera != null ? camera.cameraIndex() : "99-0-0");
-        cam.put(s.convertKey("camera_mode"), 0);           // 拍照
-        cam.put(s.convertKey("photo_state"), 0);            // 空闲
-        cam.put(s.convertKey("recording_state"), 0);        // 空闲
-        cam.put(s.convertKey("zoom_factor"), 2.0);
-        cam.put(s.convertKey("remain_photo_num"), 1000);
-        cam.put(s.convertKey("remain_record_duration"), 3600);
-        cam.put(s.convertKey("record_time"), 0);
-        cam.put(s.convertKey("screen_split_enable"), 0);
-        // 红外相关字段（仅 thermal 机型上报）
-        if (ctx.isThermal()) {
-            cam.put(s.convertKey("ir_zoom_factor"), 2.0);
-            cam.put(s.convertKey("ir_metering_mode"), 0);   // 关闭测温
-        }
-        list.add(cam);
-        return list;
-    }
-
-    /**
-     * 构造 type_subtype_gimbalindex 结构（云台姿态 + 红外测温字段）。
+     * 构造 type_subtype_gimbalindex 结构（云台姿态 + 激光测距 + 红外测温字段）。
+     * <p>字段顺序对齐 M4D properties 文档：gimbal_pitch/roll/yaw → measure_target_* → payload_index → zoom_factor → thermal_*。</p>
+     * <p>measure_target_* 为激光测距目标信息，模拟器不模拟测距场景，error_state=3（NO_SIGNAL），其余为 0。</p>
      * <p>thermal_* 字段仅 thermal 机型（M4TD）上报，M4D 不上报。</p>
-     * <p>核实依据：M4D properties 文档中 thermal_* 字段位于 type_subtype_gimbalindex 结构下。</p>
+     * <p>核实依据：M4D properties 文档 type_subtype_gimbalindex 结构（pushMode=0, r）。</p>
      */
     private Map<String, Object> buildGimbalInfo(OsdContext ctx) {
         OsdStrategy s = ctx.getStrategy();
         PayloadType camera = PayloadType.defaultCameraFor(ctx.getDroneType());
         Map<String, Object> m = new LinkedHashMap<>();
-        // 共用云台姿态字段
+        // 云台姿态字段
         m.put(s.convertKey("gimbal_pitch"), 0.0);
         m.put(s.convertKey("gimbal_roll"), 0.0);
         m.put(s.convertKey("gimbal_yaw"), 0.0);
+        // 激光测距目标字段（模拟器不模拟测距，error_state=3=NO_SIGNAL）
+        m.put(s.convertKey("measure_target_longitude"), 0.0);    // 激光测距目标经度
+        m.put(s.convertKey("measure_target_latitude"), 0.0);     // 激光测距目标纬度
+        m.put(s.convertKey("measure_target_altitude"), 0.0);     // 激光测距目标海拔（米）
+        m.put(s.convertKey("measure_target_distance"), 0.0);     // 激光测距距离（米）
+        m.put(s.convertKey("measure_target_error_state"), 3);    // 3=NO_SIGNAL（无信号/无目标）
+        // 负载标识
         m.put(s.convertKey("payload_index"), camera != null ? camera.cameraIndex() : "99-0-0");
         m.put(s.convertKey("zoom_factor"), 2.0);
         // 红外测温字段（仅 thermal 机型上报）
@@ -102,22 +87,6 @@ public class M4DDroneOsdBuilder extends AbstractDroneOsdBuilder {
             m.put(s.convertKey("thermal_global_temperature_min"), 20.0);
             m.put(s.convertKey("thermal_global_temperature_max"), 50.0);
         }
-        return m;
-    }
-
-    /**
-     * 构造 wireless_link_topo（图传连接拓扑）。
-     * <p>M4D 家族特有字段，M30 家族无此字段。</p>
-     */
-    private Map<String, Object> buildWirelessLinkTopo(OsdStrategy s) {
-        Map<String, Object> m = new LinkedHashMap<>();
-        // center_node：飞行器对频信息
-        Map<String, Object> centerNode = new LinkedHashMap<>();
-        centerNode.put(s.convertKey("sdr_id"), 0);
-        centerNode.put(s.convertKey("sn"), "");
-        m.put(s.convertKey("center_node"), centerNode);
-        // leaf_nodes：机场对频信息（空数组，单机场场景）
-        m.put(s.convertKey("leaf_nodes"), new ArrayList<>());
         return m;
     }
 }

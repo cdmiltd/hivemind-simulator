@@ -13,7 +13,7 @@
 
     <groupId>ltd.cdmi.hivemind</groupId>
     <artifactId>dji-dock-simulator</artifactId>
-    <version>1.0.0</version>
+    <version>1.1.0</version>
     <name>DJI Dock Simulator</name>
     <description>DJI Dock 机场模拟器</description>
 

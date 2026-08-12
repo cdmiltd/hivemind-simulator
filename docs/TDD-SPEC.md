@@ -316,6 +316,7 @@ TDD（测试驱动开发）是本项目的标准开发方式：
   - `P-6` 必填字段缺失（缺 tid/bid/method/data）—— 阶段 2 实现
   - `P-7` 字段类型错误（method 非字符串等）—— 阶段 2 实现
   - `P-8` Dock 能力不匹配（平台给当前 Dock 下发了不支持的指令）—— 阶段 2 实现
+  - `P-9` 平台调用废弃接口（平台下发了 DJI 已废弃的下行接口，如 `drone_control`）
 - **处理建议**：反馈平台修复
 
 #### TC-ERR-003：S 类错误码（模拟器责任）
@@ -663,15 +664,17 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **给定**：drone-type=M4TD 或 M4D
 - **当**：上报飞行器 OSD
 - **那么**：使用 M4DDroneOsdBuilder（supports M4D/M4TD）
-- **那么**：字段集包含 `wireless_link_topo`/`cameras`（M4D 家族特有）
+- **那么**：字段集包含 `cameras`/`type_subtype_gimbalindex`（M4D 家族特有），`is_near_area_limit`/`is_near_height_limit` 由基类提供（M30/M3D/M4D 共有），不包含 `wireless_link_topo`（pushMode=1，在 state topic）
+- **那么**：`type_subtype_gimbalindex` struct 包含 `measure_target_*` 字段（M4D 升级方式，不再用负载索引 key）
 - **给定**：drone-type=M30T 或 M30
 - **当**：上报飞行器 OSD
 - **那么**：使用 M30DroneOsdBuilder（supports M30/M30T）
-- **那么**：字段集包含 `payloads`/`distance_limit_status`/`rth_altitude`（M30 家族特有），不包含 `wireless_link_topo`
+- **那么**：字段集包含 `payloads`/`rc_lost_action`/`cameras`/负载索引 key 属性（M30 家族特有），`distance_limit_status`/`rth_altitude` 由基类提供（M30/M3D/M4D 共有）
+- **那么**：负载属性以负载索引（如 `52-0-0`）为 key，包含 `measure_target_*` 字段（M30 旧版方式）
 - **核实依据**：
-  - [M4D properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/aircraft/m4d-properties.html)：含 `wireless_link_topo`
-  - [M30 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/aircraft/m30-properties.html)：含 `payloads`，无 `wireless_link_topo`
-- **错误后果**：M30 上报 `wireless_link_topo` 会导致平台解析异常
+  - [M4D properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/aircraft/m4d-properties.html)：`wireless_link_topo` pushMode=1（state topic），`type_subtype_gimbalindex` pushMode=0（OSD），`measure_target_*` 在 `type_subtype_gimbalindex` struct 下
+  - [M30 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/aircraft/m30-properties.html)：含 `payloads`，无 `wireless_link_topo`/`type_subtype_gimbalindex`
+- **错误后果**：M30 上报 `wireless_link_topo` 或 `type_subtype_gimbalindex` 会导致平台解析异常
 
 #### TC-BUILDER-003：红外字段按机型 sub_type 条件上报
 - **给定**：drone-type=M4TD（sub_type=1，含红外相机）
@@ -739,6 +742,104 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **核实依据**：[Dock1 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/properties.html) sub_device 用 `product_type`；[Dock2 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/properties.html) / [Dock3 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3-properties.html) sub_device 用 `device_model_key`
 - **错误后果**：Dock1 使用 `device_model_key` 会导致平台无法识别子设备型号
 
+#### TC-BUILDER-011：pushMode=0 简单字段完整覆盖（OSD 定频上报）
+- **给定**：任意 Dock 版本，设备已上线
+- **当**：上报机场 OSD
+- **那么**：OSD 必须包含以下 pushMode=0 简单字段（DJI properties 文档标注为定频上报的标量属性）：
+  - `drc_state`：DRC 链路状态（即使未进入 DRC 也上报 0=未连接）
+  - `environment_temperature`：环境温度（°C）
+  - `working_current`：工作电流（mA）
+  - `working_voltage`：工作电压（mV）
+  - `first_power_on`：首次上电时间（ms）
+  - `activation_time`：机场激活时间（s）
+  - `emergency_stop_state`：紧急停止按钮状态
+  - `alarm_state`：机场声光报警状态
+  - `battery_store_mode`：电池存储模式
+  - `job_number`：机场累计作业次数
+  - `flighttask_step_code`：任务步骤码
+- **核实依据**：[Dock3 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/properties.html) 上述字段 pushMode=0
+- **错误后果**：缺失字段会导致平台设备详情页属性缺失，影响监控完整性
+
+#### TC-BUILDER-012：pushMode=0 结构体字段完整覆盖（OSD 定频上报）
+- **给定**：任意 Dock 版本，设备已上线
+- **当**：上报机场 OSD
+- **那么**：OSD 必须包含以下 pushMode=0 结构体字段，且子字段对齐 DJI 文档结构：
+  - `media_file_detail`：`{remain_upload}`（待上传数量）
+  - `position_state`：`{is_calibration, is_fixed, quality, gps_number, rtk_number}`（搜星状态）
+  - `wireless_link`：`{dongle_number, 4g_link_state, sdr_link_state, link_workmode, sdr_quality, 4g_quality, 4g_uav_quality, 4g_gnd_quality, sdr_freq_band, 4g_freq_band}`（图传链路）
+  - `alternate_land_point`：`{longitude, latitude, safe_land_height, is_configured, height}`（备降点）
+  - `self_converge_coordinate`：`{latitude, longitude, height}`（自收敛坐标，**Dock3 特有**，使用机场配置的经纬度和椭球高）
+  - `drone_battery_maintenance_info`：`{maintenance_state, maintenance_time_left, heat_state, batteries}`（飞行器电池保养信息）
+  - `maintain_status`：`{maintain_status_array: [{state, last_maintain_type, last_maintain_time, last_maintain_work_sorties}]}`（保养信息）
+- **核实依据**：[Dock3 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/properties.html) 上述字段 pushMode=0 且 type=struct
+- **错误后果**：结构体子字段缺失或多余会导致平台 Jackson 反序列化失败
+
+#### TC-BUILDER-013：Dock OSD 分多条推送（对齐 DJI 文档「机场的设备属性推送是分多条推送的」）
+- **给定**：任意 Dock 版本，设备已上线，droneActivated=true
+- **当**：执行一次 `publishOsd()`
+- **那么**：向 `thing/product/{dockSn}/osd` 推送 **3 条** OSD 消息（非 1 条），每条包含不同字段子集：
+  - **Group 1（电源/电池/保养/统计）**：job_number, activation_time, working_current, working_voltage, electric_supply_voltage, backup_battery, drone_battery_maintenance_info, maintain_status
+  - **M-2 诊断日志（electric_supply_voltage）**：OSD 封面字段（topic-definition.html 示例有），Dock2/Dock3 属性列表无，三版均上报，待真机验证
+  - **Group 2（任务/图传/媒体）**：flighttask_step_code, media_file_detail, wireless_link, drc_state
+  - **Group 3（位置/环境/机械/子设备）**：mode_code, latitude, longitude, height, network_state, storage, sub_device, cover_state, drone_in_dock, drone_charge_state, temperature, humidity, wind_speed, rainfall, environment_temperature, supplement_light_state, air_conditioner, emergency_stop_state, alarm_state, putter_state, battery_store_mode, alternate_land_point, first_power_on, position_state + 版本特有字段（Dock1 含 drone_authority_info.control_source+locked；Dock3 含 self_converge_coordinate）
+  - **M-2 诊断日志（putter_state）**：Dock1 文档属性列表确认有 putter_state；Dock2/Dock3 文档属性列表无此字段，但 DJI OSD 结构示例和 Dock2 推送示例中均包含。模拟器三版均上报 putter_state=0，Dock2/Dock3 待真机验证
+- **那么**：每条消息都有独立的 envelope（bid/tid/timestamp/gateway/data）
+- **那么**：drone OSD 仍然为单条消息（DJI 文档仅明确机场分多条，飞行器不拆分）
+- **那么**：总 publish 次数 = 3（dock）+ 1（drone）= 4 次
+- **核实依据**：DJI 设备属性推送文档「需要注意遥控器的设备属性在一条消息体中上报，而机场的设备属性推送是分多条推送的」+ 示例展示 3 条 OSD 消息
+- **M-2 诊断日志**：Dock3 具体字段分组方案基于 Dock1 示例推断，DJI 文档未提供 Dock3 专属分组，待真机验证
+- **错误后果**：若模拟器将所有 OSD 字段打包在单条消息中，平台多消息处理逻辑（如增量合并、延迟解析）无法被测试覆盖
+
+#### TC-BUILDER-014：飞行器 OSD 共用字段完整覆盖（对齐 DJI M4D/M30 properties 文档 + 真机示例）
+- **给定**：任意机型（M4D/M3D/M30），设备已上线，droneActivated=true
+- **当**：执行一次 `publishOsd()`
+- **那么**：向 `thing/product/{aircraft_sn}/osd` 推送 **1 条** Drone OSD 消息（飞行器 OSD 不拆分，DJI 文档明确「飞行器在一条消息体中上报」）
+- **那么**：OSD 必须包含以下 pushMode=0 共用字段（DJI M4D/M30 properties 文档 + 真机 OSD 示例）：
+  - `mode_code`：飞行器状态（枚举值，从 DeviceState 读取）
+  - `latitude`/`longitude`/`height`/`elevation`：位置（height=绝对高度，elevation=相对起飞点高度）
+  - `attitude_pitch`/`attitude_roll`（float）/`attitude_head`（**int**）：姿态角（M30/M3D/M4D 文档均为 int）
+  - `horizontal_speed`/`vertical_speed`：速度
+  - `wind_speed`/`wind_direction`：风速风向
+  - `battery`：电池信息（capacity_percent + remain_flight_time + return_home_power + landing_power + batteries 数组）
+  - `position_state`：定位状态（is_fixed + quality + gps_number + rtk_number）— M3D 文档无 is_calibration，已移除
+  - `total_flight_time`：累计飞行航时（**float**，秒）— M30/M3D/M4D 文档均为 float
+  - `activation_time`：飞行器激活时间（unix 秒）— M4D 文档 pushMode=0
+  - `gear`：档位（0=A,1=P,2=NAV,...）— M4D/M3D/M30 共用（用户决策）
+  - `height_limit`：飞行器限高（米）— M4D 文档 pushMode=0
+  - `distance_limit_status`：限远状态（state + distance_limit + is_near_distance_limit）— M30/M3D/M4D 共有，pushMode=0
+  - `rth_altitude`：返航高度（int, 米, rw）— M30/M3D/M4D 共有，pushMode=0
+  - `home_distance`：距离 Home 点距离 — M30 文档 pushMode=0
+  - `maintain_status`：保养信息（maintain_status_array，3 条记录 type=1/2/3）— M4D 文档 pushMode=0
+  - `night_lights_state`：夜航灯状态（0=关闭,1=开启，从 DeviceState 读取）— M4D 文档 pushMode=0
+  - `obstacle_avoidance`：避障状态（horizon + upside + downside）— M4D 文档 pushMode=0
+  - `storage`：存储容量（total + used）— M30 文档 pushMode=0
+  - `total_flight_distance`：累计飞行总里程（米）— M30 文档 pushMode=0
+  - `total_flight_sorties`：累计飞行总架次 — M4D 文档 pushMode=0
+  - `track_id`：轨迹ID（字符串）— 按真机 OSD 示例上报（文档未明确）
+- **那么**：机型特有字段由子类追加（M4D/M3D: cameras + type_subtype_gimbalindex；M30: rc_lost_action + rid_state + 负载索引 key 属性）；`is_near_area_limit`/`is_near_height_limit` 由基类提供（M30/M3D/M4D 共有）；`payloads`（pushMode=1）不在 OSD，由 state topic 上报
+- **那么**：M30 负载属性（旧版方式）：以负载索引（{type-subtype-gimbalIndex}）为 key 的 struct，包含 gimbal_pitch/roll/yaw + measure_target_* + zoom_factor + thermal_*（仅 thermal 机型）；`payload_index` 是 pushMode=1（state topic），不在 OSD 中；`version` 字段文档中不存在，不上报
+  - M30→`52-0-0`，M30T→`53-0-0`，M3D→`80-0-0`，M3TD→`81-0-0`
+  - 参考DJI 产品支持页面相机枚举值 + 设备属性推送示例
+- **那么**：M4D 负载属性（升级方式）：`measure_target_*` 字段在 `type_subtype_gimbalindex` struct 下，不以负载索引为 key
+  - M4D→`98-0-0`，M4TD→`99-0-0`（作为 `type_subtype_gimbalindex.payload_index` 的值）
+  - `measure_target_error_state` 枚举：0=NORMAL, 1=TOO_CLOSE, 2=TOO_FAR, 3=NO_SIGNAL；模拟器用 3=NO_SIGNAL（M30/M4D 统一）
+- **那么**：cameras 数组子字段全部对齐 DJI 文档（M30/M3D/M4D 共用基类 buildCameras()）：基本字段 + liveview_world_region + photo/video_storage_settings + wide_*/zoom_* 曝光参数 + zoom_focus_* 对焦参数 + ir_metering_* 红外测温（仅 thermal 机型）
+- **那么**：M30 OSD 特有 `rid_state`（RID 工作状态, bool, pushMode=0, 仅 M30/M30T）
+- **那么**：以下字段 pushMode=1，**不在 OSD 中**，由 `DockOnlineService.publishDroneState()` 在 state topic 上报：
+  - `firmware_version`：飞行器固件版本（M30 文档 pushMode=1）
+  - `payloads`：负载状态（M30 文档 pushMode=1），`payload_index` 按机型动态获取（M30→52-0-0, M30T→53-0-0, M3D→80-0-0, M4D→98-0-0 等）
+  - `wpmz_version`/`commander_mode_lost_action`/`home_longitude`/`home_latitude` 等
+  - `wireless_link_topo`：图传连接拓扑（M3D/M4D 文档 pushMode=1，M3D/M3TD/M4D/M4TD 上报，M30 无此字段）
+  - `rth_mode`：返航高度模式设置值（M3D/M4D 文档 pushMode=1，M30 文档无此字段）
+  - M30 `{type-subtype-gimbalindex}.payload_index`（pushMode=1）+ `thermal_supported_palette_styles`（pushMode=1, 仅 thermal）
+  - M3D/M4D `type_subtype_gimbalindex.thermal_supported_palette_styles`（pushMode=1, 仅 thermal）
+- **注意**：`battery.batteries[].firmware_version` 是 pushMode=0（在 OSD 中，作为 battery 子对象），与顶层 `firmware_version`（pushMode=1，在 state）不同
+- **核实依据**：[M4D properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/aircraft/m4d-properties.html) | [M30 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/aircraft/m30-properties.html) + 真机 M30 OSD 示例 + [产品支持](https://developer.dji.com/doc/cloud-api-tutorial/cn/overview/product-support.html)
+- **M-2 诊断日志**：
+  - `track_id` 字段文档未明确，按真机 OSD 示例上报，待真机验证
+  - 负载属性 `measure_target_*` 字段为模拟值（无测距场景）：M30 error_state=1，M4D error_state=3(NO_SIGNAL)，待真机验证
+- **错误后果**：若飞行器 OSD 缺少这些字段，平台解析飞行器状态会失败（如电量预警、避障状态、保养提醒等）
+
 ### 2.13 属性设置（property/set）处理
 
 > 设计背景：DJI Cloud API 中 accessMode=rw 的属性可通过 `thing/product/{gateway_sn}/property/set` 下发设置。
@@ -750,17 +851,43 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **给定**：任意 Dock 版本（三版共有），设备已上线
 - **当**：收到 property/set，data 包含 `{"silent_mode": 1}`
 - **那么**：DeviceState.silentMode 更新为 1
-- **那么**：回复 property/set_reply，data 回显 `{"silent_mode": 1}`
+- **那么**：回复 property/set_reply，data 为 `{"silent_mode": {"result": 0}}`（标量属性叶子字段包 result）
 - **那么**：下次 OSD 上报 silent_mode=1（静音模式）
-- **核实依据**：[Dock1/Dock2/Dock3 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/properties.html) silent_mode accessMode=rw（三版均有）
+- **核实依据**：[Dock1/Dock2/Dock3 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/properties.html) silent_mode accessMode=rw（三版均有）+ DJI property/set_reply 示例（result=0 成功）
+- **M-2 诊断日志**：标量属性 set_reply 格式 `{"属性名": {"result": 0}}` 为推断（DJI 文档示例仅展示 struct 属性），待真机验证
 
 #### TC-PROP-002：air_conditioner_state（r）只读，property/set 不更新本地状态
 - **给定**：任意 Dock 版本（三版共有），设备已上线
 - **当**：收到 property/set，data 包含 `{"air_conditioner_state": 1}`
-- **那么**：PropertySetHandler 仅回复 property/set_reply（data 回显）
+- **那么**：PropertySetHandler 仅回复 property/set_reply（data 为 `{"air_conditioner_state": {"result": 0}}`）
 - **那么**：DeviceState 中不持久化 air_conditioner_state（它是设备自管理的运行状态）
 - **那么**：下次 OSD 上报 air_conditioner_state 仍为模拟值（不受 property/set 影响）
 - **核实依据**：[Dock1/Dock2/Dock3 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/properties.html) air_conditioner accessMode=r（三版均有，只读）
+
+#### TC-PROP-006：struct 属性 property/set_reply 格式（对齐 DJI 文档示例）
+- **给定**：任意 Dock 版本，设备已上线
+- **当**：收到 property/set，data 包含 `{"distance_limit_status": {"state": 1}}`
+- **那么**：回复 property/set_reply，data 为 `{"distance_limit_status": {"state": {"result": 0}}}`（每个子字段包 result）
+- **核实依据**：DJI 设备属性设置示例 — set_reply 中每个被设置的叶子字段用 `{"result": 0}` 替换原值（0=成功，1=失败，2=超时）
+
+#### TC-PROP-007：air_transfer_enable（rw）可通过 property/set 设置（Dock2/Dock3，Dock1 不支持）
+- **给定**：Dock2 或 Dock3，设备已上线
+- **当**：收到 property/set，data 包含 `{"air_transfer_enable": false}`
+- **那么**：DeviceState.airTransferEnable 更新为 false
+- **那么**：回复 property/set_reply，data 为 `{"air_transfer_enable": {"result": 0}}`
+- **那么**：下次 state topic 上报 air_transfer_enable=false（反映新值）
+- **Dock1 特例**：Dock1 无此属性（DJI 文档 Dock1 properties 列表无 air_transfer_enable）
+  - publishDockState 对 Dock1 **不上报** air_transfer_enable
+  - PropertySetHandler 对 Dock1 收到此 set **回复 result=0 但不更新状态**
+- **核实依据**：[Dock2/Dock3 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/properties.html) air_transfer_enable accessMode=rw, pushMode=1 | [Dock1 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/properties.html)（无此字段）
+
+#### TC-PROP-008：user_experience_improvement（rw）可通过 property/set 设置（三版共有）
+- **给定**：Dock2 或 Dock3，设备已上线
+- **当**：收到 property/set，data 包含 `{"user_experience_improvement": 2}`
+- **那么**：DeviceState.userExperienceImprovement 更新为 2（同意加入）
+- **那么**：回复 property/set_reply，data 为 `{"user_experience_improvement": {"result": 0}}`
+- **那么**：下次 state topic 上报 user_experience_improvement=2（反映新值）
+- **核实依据**：[Dock2/Dock3 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/properties.html) user_experience_improvement accessMode=rw, pushMode=1（枚举 0=初始,1=拒绝,2=同意）
 
 #### TC-PROP-003：调试面板可通过 REST API 设置 silentMode
 - **给定**：任意 Dock 版本（三版共有）
@@ -776,6 +903,34 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **那么**：回复 property/set_reply
 - **那么**：监控器在 OSD 日志中观察到 silent_mode=1
 - **说明**：监控器模拟平台下发 property/set，测试模拟器的协议处理能力
+
+#### TC-PROP-005：机场上线推送 pushMode=1 简单属性到 state topic
+- **给定**：dock-type=DOCK3，设备通过 update_topo 上线成功
+- **当**：上线流程完成（`publishDockState` 调用）
+- **那么**：向 `thing/product/{dockSn}/state` 推送一条 state 消息，data 包含以下 pushMode=1 简单属性：
+  - `firmware_version`：固件版本（字符串）
+  - `firmware_upgrade_status`：固件升级状态（0=未升级）
+  - `compatible_status`：固件一致性（0=不需要一致性升级）
+  - `acc_time`：机场累计运行时长（s）
+  - `air_transfer_enable`：空中回传开启（bool，true）
+  - `user_experience_improvement`：用户体验改进计划（0=初始状态）
+  - `silent_mode`：静音模式（0=非静音）
+- **那么**：消息 envelope 包含 `bid`/`tid`/`timestamp`/`gateway`/`data` 字段
+- **核实依据**：[Dock3 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/properties.html) 上述字段 pushMode=1，按 DJI 文档"state 属性在状态变化时上报"
+- **错误后果**：pushMode=1 属性放入 OSD 定频推送会导致平台收到重复属性变更通知
+
+#### TC-PROP-006：机场上线推送 pushMode=1 复杂结构属性到 state topic
+- **给定**：dock-type=DOCK3，设备通过 update_topo 上线成功
+- **当**：上线流程完成（`publishDockState` 调用）
+- **那么**：state 消息 data 包含以下 pushMode=1 复杂结构属性，结构对齐 DJI 文档：
+  - `rtcm_info`：`{mount_point, port, host, rtcm_device_type, source_type}`（RTK 标定源）
+  - `wireless_link_topo`：`{secret_code[28], center_node: {sdr_id, sn}, leaf_nodes: []}`（图传连接拓扑，secret_code 为 28 元素数组）
+  - `dongle_infos`：`[{imei, dongle_type, eid, esim_activate_state, sim_card_state, sim_slot, esim_infos, sim_info: {telecom_operator, sim_type, iccid}}]`（4G Dongle 信息）
+  - `live_status`：`[]`（直播状态推送，无在推视频流时为空数组）
+- **那么**：`wireless_link_topo.center_node.sn` 等于当前飞行器 SN（`runtimeConfig.getDroneSn()`）
+- **那么**：`wireless_link_topo.secret_code` 长度为 28（DJI 文档定义的固定长度）
+- **核实依据**：[Dock3 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/properties.html) 上述字段 pushMode=1 且 type=struct
+- **错误后果**：secret_code 长度不符或 center_node.sn 为空会导致平台图传拓扑解析异常
 
 ### 2.14 MQTT 消息诊断
 
@@ -1211,6 +1366,53 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **那么**：不中断后续 DRC 事件推送
 - **核实依据**：DrcCommandHandler.handleDrcCommand 中 try-catch 返回 result=1
 
+#### TC-DRC-048：stick_control 杆量控制无回包
+- **给定**：DRC 模式已激活，平台通过 drc/down 下发 `{"method":"stick_control","data":{"roll":1024,"pitch":1024,"throttle":1024,"yaw":1024},"seq":N}`
+- **当**：模拟器收到指令
+- **那么**：不回包（DJI 文档明确"本协议无回包机制"）
+- **那么**：记录 info 日志（roll/pitch/throttle/yaw 值）
+- **核实依据**：[Dock3 drc.html DRC-杆量控制](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#drc-杆量控制) "本协议无回包机制"
+
+#### TC-DRC-049：drone_control Dock1 正常处理 / Dock2/Dock3 废弃
+- **给定 Dock1**：平台通过 drc/down 下发 `{"method":"drone_control","data":{"seq":1,"x":2.34,"y":-2.45,"h":2.76,"w":2.86}}`
+- **当**：模拟器收到指令
+- **那么**：解析 seq/x/y/h/w，不回包（成功不回包）
+- **那么**：不生成 P-9 诊断码
+- **核实依据**：[Dock1 drc.html DRC-飞行控制](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/drc.html#drc-飞行控制) Dock1 文档中 drone_control 为有效指令
+- **给定 Dock2/Dock3**：平台下发同样指令
+- **那么**：不回包，生成 P-9 诊断码（"平台调用了废弃接口 drone_control"）
+- **核实依据**：[Dock3 drc.html DRC-飞行控制（已废弃）](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#drc-飞行控制-已废弃) 文档明确"本协议已不再维护"
+
+#### TC-DRC-050：heart_beat 心跳回包回显 seq + timestamp
+- **给定**：平台通过 drc/down 下发 `{"method":"heart_beat","data":{"seq":1,"timestamp":1670415891013}}`
+- **当**：模拟器收到指令
+- **那么**：通过 drc/up 回包 `{"method":"heart_beat","data":{"seq":1,"timestamp":1670415891013}}`
+- **那么**：回包 data 含 seq + timestamp，无 result 字段
+- **核实依据**：[Dock1 drc.html DRC-心跳](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/drc.html#drc-心跳) 回包 data 与请求 data 一致
+
+#### TC-DRC-051：hsi_info_push 避障信息上报字段集
+- **给定**：DRC 模式已激活
+- **当**：模拟器定时推送 DRC 事件
+- **那么**：通过 drc/up 上报 `{"method":"hsi_info_push","data":{...},"timestamp":...}`
+- **那么**：data 包含字段：`up_distance`/`down_distance`/`up_enable`/`up_work`/`down_enable`/`down_work`/`left_enable`/`left_work`/`right_enable`/`right_work`/`front_enable`/`front_work`/`back_enable`/`back_work`/`vertical_enable`/`vertical_work`/`horizontal_enable`/`horizontal_work`/`around_distances`
+- **那么**：`around_distances` 为空数组（表示任意角度都无障碍物）
+- **核实依据**：[Dock3 drc.html DRC-避障信息上报](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#drc-避障信息上报) "若上报空数组，意味任意角度都无障碍物"
+
+#### TC-DRC-052：delay_info_push 图传链路延时信息上报字段集
+- **给定**：DRC 模式已激活
+- **当**：模拟器定时推送 DRC 事件
+- **那么**：通过 drc/up 上报 `{"method":"delay_info_push","data":{...},"timestamp":...}`
+- **那么**：data 包含字段：`sdr_cmd_delay`（int，图传命令链路延时）、`liveview_delay_list`（数组）
+- **那么**：`liveview_delay_list` 元素含 `video_id`（码流编号）和 `liveview_delay_time`（码流延时）
+- **核实依据**：[Dock3 drc.html DRC-图传链路延时信息上报](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#drc-图传链路延时信息上报)
+
+#### TC-DRC-053：osd_info_push 高频 OSD 信息上报字段集
+- **给定**：DRC 模式已激活
+- **当**：模拟器定时推送 DRC 事件
+- **那么**：通过 drc/up 上报 `{"method":"osd_info_push","data":{...},"timestamp":...}`
+- **那么**：data 包含字段：`attitude_head`/`latitude`/`longitude`/`height`/`speed_x`/`speed_y`/`speed_z`/`gimbal_pitch`/`gimbal_roll`/`gimbal_yaw`
+- **核实依据**：[Dock3 drc.html DRC-高频 osd 信息上报](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#drc-高频-osd-信息上报)
+
 ### 2.16 指令飞行（drc.html）
 
 > 设计背景：DJI Cloud API 中「指令飞行」（drc.html）与「远程控制」（remote-control.html，见 2.15）是两套独立协议：
@@ -1218,7 +1420,7 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 > - **指令飞行**（本节）：走 `services`、`events` topic，消息格式 `{tid, bid, method, data, timestamp}`，处理飞行任务指令（一键起飞/flyto/控制权抢夺）及进度事件
 >
 > 指令飞行包含两类：
-> - **Service 类**（云→设备，services topic）：`flight_authority_grab`、`payload_authority_grab`、`drc_mode_enter`、`drc_mode_exit`、`takeoff_to_point`、`fly_to_point`
+> - **Service 类**（云→设备，services topic）：`flight_authority_grab`、`payload_authority_grab`、`drc_mode_enter`、`drc_mode_exit`、`takeoff_to_point`、`fly_to_point`、`fly_to_point_stop`、`fly_to_point_update`
 > - **Event 类**（设备→云，events topic）：`fly_to_point_progress`、`takeoff_to_point_progress`、`obstacle_avoidance_notify`、`joystick_invalid_notify`、`camera_photo_take_progress`、`poi_status_notify`
 >
 > 核实依据：
@@ -1242,12 +1444,13 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **核实依据**：[Dock3 drc.html flyto](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#flyto-飞向目标点) 回复 data 仅含 result
 
 #### TC-FLY-003：takeoff_to_point 指令处理
-- **给定**：平台通过 services 下发 `{"method":"takeoff_to_point","data":{"flight_id":"xxx","target_latitude":12.23,"target_longitude":12.32,"target_height":100,"security_takeoff_height":100,"max_speed":12,...}}`
+- **给定**：平台通过 services 下发 `{"method":"takeoff_to_point","data":{"flight_id":"xxx","target_latitude":12.23,"target_longitude":12.32,"target_height":100,"security_takeoff_height":100,"rth_altitude":100,"rth_mode":1,"rc_lost_action":0,"commander_mode_lost_action":1,"commander_flight_mode":1,"commander_flight_height":80,"max_speed":12,"simulate_mission":{"is_enable":0,"latitude":0,"longitude":0},"flight_safety_advance_check":1}}`
 - **当**：模拟器收到指令
 - **那么**：立即回 `services_reply`，method=`takeoff_to_point`，data.result=0
-- **那么**：解析 flight_id、target_latitude/longitude/height、security_takeoff_height、max_speed 存入 DeviceState
-- **那么**：调度 `takeoff_to_point_progress` 事件序列（见 TC-FLY-008），**不再使用通用 output.status=ok 占位**
-- **核实依据**：[Dock3 drc.html 一键起飞](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#一键起飞) 回复 data 仅含 result；进度事件为专用 `takeoff_to_point_progress`
+- **那么**：解析全部飞行参数存入 DeviceState：flight_id、target_latitude/longitude/height、security_takeoff_height、rth_altitude、rth_mode、rc_lost_action、commander_mode_lost_action、commander_flight_mode、commander_flight_height、max_speed、simulate_mission{is_enable,latitude,longitude}、flight_safety_advance_check（exit_wayline_when_rc_lost 废弃不解析）
+- **那么**：调度 `takeoff_to_point_progress` 事件序列（见 TC-FLY-008），planned_path_points 含 3 个点：起点 → 安全起飞点（同经纬度，高度=起飞点椭球高+security_takeoff_height）→ 目标点
+- **那么**：**不再使用通用 output.status=ok 占位**
+- **核实依据**：[Dock2/Dock3 drc.html 一键起飞](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#一键起飞) 回复 data 仅含 result；rth_mode/commander_flight_mode/flight_safety_advance_check 为 Dock2/Dock3 特有字段；security_takeoff_height 为相对高度（ALT），需叠加起飞点椭球高
 
 #### TC-FLY-004：takeoff_to_point 不再走通用异步占位
 - **给定**：平台下发 `takeoff_to_point`
@@ -1369,7 +1572,269 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **那么**：每个元素含 `latitude`/`longitude`/`height`（椭球高）
 - **核实依据**：[Dock3 drc.html flyto 执行结果事件通知](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#flyto-执行结果事件通知) planned_path_points 为规划的轨迹点列表
 
-### 2.17 远程调试（cmd.html）
+#### TC-FLY-019：fly_to_point_stop 指令处理
+- **给定**：平台通过 services 下发 `{"method":"fly_to_point_stop","data":{}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`fly_to_point_stop`，data.result=0（无 output）
+- **那么**：清除 DeviceState 中的 currentFlyToId（停止任务状态）
+- **那么**：通过 `events` topic 上报 `fly_to_point_progress`，status=`wayline_cancel`，result=0（无人机在当前位置悬停）
+- **那么**：取消 fly_to_point 已调度的延迟任务（wayline_progress / wayline_ok 不再发布，位置不更新到目标点）
+- **核实依据**：[Dock3 drc.html 结束 flyto 飞向目标点任务](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#结束-flyto-飞向目标点任务) Data=null，回复 data 仅含 result；[flyto 执行结果事件通知](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#flyto-执行结果事件通知) status 枚举含 wayline_cancel
+
+#### TC-FLY-020：fly_to_point_update 指令处理
+- **给定**：平台通过 services 下发 `{"method":"fly_to_point_update","data":{"max_speed":12,"points":[{"latitude":12.23,"longitude":12.23,"height":100}]}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`fly_to_point_update`，data.result=0（无 output）
+- **那么**：解析 max_speed、points[0]（更新后的目标点），更新 DeviceState 中的目标点信息
+- **那么**：不发 events 进度事件（同步指令）
+- **核实依据**：[Dock3 drc.html 更新 flyto 目标点](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#更新-flyto-目标点) 回复 data 仅含 result
+
+#### TC-FLY-021：payload_authority_grab 指令处理
+- **给定**：平台通过 services 下发 `{"method":"payload_authority_grab","data":{"payload_index":"39-0-7"}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`payload_authority_grab`，data.result=0（无 output）
+- **那么**：不发 events 进度事件（同步指令）
+- **核实依据**：[Dock3 drc.html 负载控制权抢夺](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制权抢夺) 回复 data 仅含 result
+
+#### TC-FLY-022：poi_mode_enter 指令处理（Dock1 专属）
+- **给定**：Dock1 模式下，平台通过 services 下发 `{"method":"poi_mode_enter","data":{"latitude":12.23,"longitude":12.23,"height":100}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`poi_mode_enter`，data.result=0（无 output）
+- **那么**：触发 `poi_status_notify` 事件，status=`in_progress`，reason=0
+- **核实依据**：[Dock1 drc.html 飞行控制-进入POI环绕模式](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/drc.html#飞行控制-进入-poi-环绕模式) 回复 data 仅含 result
+
+#### TC-FLY-023：poi_mode_exit 指令处理（Dock1 专属）
+- **给定**：Dock1 模式下，平台通过 services 下发 `{"method":"poi_mode_exit","data":{}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`poi_mode_exit`，data.result=0（无 output）
+- **那么**：触发 `poi_status_notify` 事件，status=`ok`，reason=0
+- **核实依据**：[Dock1 drc.html 飞行控制-退出POI环绕模式](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/drc.html#飞行控制-退出-poi-环绕模式) 回复 data 仅含 result
+
+#### TC-FLY-024：poi_circle_speed_set 指令处理（Dock1 专属）
+- **给定**：Dock1 模式下，平台通过 services 下发 `{"method":"poi_circle_speed_set","data":{"circle_speed":5.2}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`poi_circle_speed_set`，data.result=0（无 output）
+- **那么**：不发 events 进度事件（同步指令）
+- **核实依据**：[Dock1 drc.html 飞行控制-POI环绕速度设置](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/drc.html#飞行控制-poi-环绕速度设置) 回复 data 仅含 result
+
+#### TC-FLY-025：飞行参数用于真实轨迹模拟
+- **给定**：平台通过 takeoff_to_point 下发 `{"security_takeoff_height":80,"rth_altitude":100,"rc_lost_action":2,"simulate_mission":{"is_enable":0}}`
+- **当**：模拟器执行起飞任务
+- **那么**：planned_path_points 含 3 个点（起点 → 安全起飞点 → 目标点），security_takeoff_height 生效
+- **那么**：task_finish 后 drone 位置更新到目标点（simulate_mission.is_enable=0）
+- **核实依据**：[Dock1 drc.html 一键起飞](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/drc.html#一键起飞) security_takeoff_height/rth_altitude/rc_lost_action/simulate_mission 字段定义
+
+#### TC-FLY-026：simulate_mission 室内调试模式
+- **给定**：takeoff_to_point 下发 `{"simulate_mission":{"is_enable":1,"latitude":22.9,"longitude":113.9}}`
+- **当**：模拟器执行起飞任务，task_finish 完成
+- **那么**：drone 位置不更新（droneLatitude/droneLongitude/droneElevation 保持原值）
+- **那么**：planned_path_points 照常上报轨迹
+- **核实依据**：[Dock1 drc.html 一键起飞](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/drc.html#一键起飞) simulate_mission 字段"是否在模拟器中执行任务"
+
+#### TC-FLY-027：rth_altitude 用于返航轨迹
+- **给定**：takeoff_to_point 设置 rth_altitude=100，drone 当前高度低于返航高度
+- **当**：触发 return_home_info 事件
+- **那么**：planned_path_points 含 3 个点（drone 当前位置 → 升到 rth_altitude → 机场位置）
+- **那么**：中间点高度 = 机场椭球高 + rth_altitude（ALT → 椭球高转换）
+- **核实依据**：[Dock1 drc.html 一键起飞](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/drc.html#一键起飞) rth_altitude 为相对起飞点高度
+
+#### TC-FLY-028：rc_lost_action 遥控器失联模拟
+- **给定**：takeoff_to_point 设置 rc_lost_action（0=悬停 / 1=降落 / 2=返航）
+- **当**：通过 UI「模拟失联」按钮或 REST API `/api/flight/trigger-rc-lost` 触发失联
+- **那么**：立即上报 `joystick_invalid_notify` 事件（reason=0 遥控器失联，need_reply=1）
+- **那么**：根据 rc_lost_action 设置 mode_code：
+  - rc_lost_action=0（悬停）→ mode_code=0，位置不变，无后续行为
+  - rc_lost_action=1（降落）→ mode_code=12（降落中），延迟后 height=0、mode_code=0、droneInDock=false、位置保持当前经纬度（原地降落）
+  - rc_lost_action=2（返航）→ mode_code=9（自动返航），延迟后位置=机场、mode_code=0、droneInDock=true（归舱），**不发 return_home_info**（return_home_info 属于航线管理事件，rc_lost 走 joystick_invalid_notify 通知链路）
+- **那么**：rc_lost_action=1/2 时记录 M-2 诊断日志（模拟器推断行为，DJI 文档未明确降落位置/返航后续行为/是否发 return_home_info，待真机验证）
+- **核实依据**：[Dock3 drc.html 一键起飞](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#一键起飞) rc_lost_action 枚举；[Dock3 drc.html DRC-飞行控制无效原因通知](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#drc-飞行控制无效原因通知) joystick_invalid_notify reason=0
+
+#### TC-FLY-029：Dock2/Dock3 特有字段解析
+- **给定**：Dock2/Dock3 平台通过 takeoff_to_point 下发 `{"rth_mode":1,"commander_flight_mode":1,"flight_safety_advance_check":1}`
+- **当**：模拟器收到指令
+- **那么**：解析 rth_mode=1、commander_flight_mode=1、flight_safety_advance_check=1 存入 DeviceState
+- **那么**：Dock1 不下发这 3 个字段时，asInt() 返回默认值 0，不影响行为
+- **核实依据**：[Dock2/Dock3 drc.html 一键起飞](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#一键起飞) rth_mode/commander_flight_mode 为必填，flight_safety_advance_check 为可选；Dock1 文档无此 3 个字段
+
+#### TC-FLY-030：MQTT 消息体不泄漏内部字段
+- **给定**：平台通过 takeoff_to_point 下发含 rth_mode/commander_flight_mode/flight_safety_advance_check 的指令
+- **当**：模拟器回复 services_reply、上报 takeoff_to_point_progress 事件、上报 OSD
+- **那么**：services_reply 的 data 仅含 result（不含 rth_mode 等内部字段）
+- **那么**：takeoff_to_point_progress 的 data 仅含协议定义字段（status/result/flight_id/track_id/way_point_index/remaining_distance/remaining_time/planned_path_points）
+- **那么**：OSD 上报按 DJI 文档字段逐个构造，不含 DeviceState 内部新增字段
+- **核实依据**：[Dock2/Dock3 drc.html 一键起飞回复](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#一键起飞) services_reply data 仅含 result；[一键起飞结果事件通知](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#一键起飞结果事件通知) 字段集固定
+
+#### TC-FLY-031：rth_mode=0 拒绝执行
+- **给定**：平台通过 takeoff_to_point 下发 `rth_mode=0`（智能高度）（Dock2/Dock3 场景，rth_mode 为必填字段）
+- **当**：模拟器收到指令
+- **那么**：services_reply 返回 `result` 非 0（拒绝执行），不调度 takeoff_to_point_progress 事件，不更新 DeviceState
+- **那么**：记录 M-2 诊断日志（模拟器未确认真机具体反应：DJI 文档称机场不支持此模式，但未明确错误码/行为，模拟器按拒绝执行返回 result=1，待真机验证）
+- **那么**：Dock1 不下发 rth_mode 字段时（`isMissingNode=true`），不拒绝（默认值 0 不触发拒绝，仅显式下发 rth_mode=0 才拒绝）
+- **核实依据**：[Dock3 drc.html 一键起飞](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#一键起飞) rth_mode 枚举 {"0":"智能高度","1":"设定高度"}，原文"大疆机场当前不支持设置返航高度模式，只能选择'设定高度'模式"
+
+### 2.17 负载控制（drc.html）
+
+> 设计背景：DJI Cloud API「负载控制」走 services/services_reply topic，为同步指令（仅 services_reply，无 events 进度事件）。
+>
+> 核实依据：[Dock3 负载控制](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html) | [Dock2 负载控制](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/drc.html) | [Dock1 负载控制](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/drc.html)
+
+#### TC-PAYLOAD-003：camera_frame_zoom 框选变焦
+- **给定**：平台通过 services 下发 `{"method":"camera_frame_zoom","data":{"payload_index":"39-0-7","camera_type":"zoom","locked":true,"x":0.5,"y":0.5,"width":0.2,"height":0.2}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`camera_frame_zoom`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制-框选变焦](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-框选变焦) 回复 data 仅含 result
+
+#### TC-PAYLOAD-004：camera_mode_switch 切换相机模式
+- **给定**：平台通过 services 下发 `{"method":"camera_mode_switch","data":{"payload_index":"39-0-7","camera_mode":0}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`camera_mode_switch`，data.result=0（无 output）
+- **那么**：更新 DeviceState 中的 cameraMode/payloadIndex
+- **核实依据**：[Dock3 drc.html 负载控制—切换相机模式](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-切换相机模式) 回复 data 仅含 result
+
+#### TC-PAYLOAD-005：camera_photo_take 开始拍照
+- **给定**：平台通过 services 下发 `{"method":"camera_photo_take","data":{"payload_index":"39-0-7"}}`
+- **当**：模拟器收到指令，且当前 camera_mode != 3（非全景拍照）
+- **那么**：立即回 `services_reply`，method=`camera_photo_take`，data.result=0（无 output）
+- **当**：模拟器收到指令，且当前 camera_mode == 3（全景拍照）
+- **那么**：立即回 `services_reply`，method=`camera_photo_take`，data.result=0，data.output.status="in_progress"（表示后续会有 camera_photo_take_progress 事件上报）
+- **核实依据**：[Dock2 drc.html 负载控制—开始拍照](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/drc.html#负载控制-开始拍照) 回复 data 含 result；output.status 仅在全景拍照或其他持续性拍照行为时上报（DJI 文档原文）
+
+#### TC-PAYLOAD-006：camera_photo_stop 停止拍照
+- **给定**：平台通过 services 下发 `{"method":"camera_photo_stop","data":{"payload_index":"39-0-7"}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`camera_photo_stop`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—停止拍照](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-停止拍照) 回复 data 仅含 result
+
+#### TC-PAYLOAD-007：camera_recording_start 开始录像
+- **给定**：平台通过 services 下发 `{"method":"camera_recording_start","data":{"payload_index":"39-0-7"}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`camera_recording_start`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—开始录像](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-开始录像) 回复 data 仅含 result
+
+#### TC-PAYLOAD-008：camera_recording_stop 停止录像
+- **给定**：平台通过 services 下发 `{"method":"camera_recording_stop","data":{"payload_index":"39-0-7"}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`camera_recording_stop`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—停止录像](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-停止录像) 回复 data 仅含 result
+
+#### TC-PAYLOAD-009：camera_screen_drag 画面拖动控制
+- **给定**：平台通过 services 下发 `{"method":"camera_screen_drag","data":{"payload_index":"39-0-7","locked":true,"pitch_speed":0.1,"yaw_speed":0.1}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`camera_screen_drag`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—画面拖动控制](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-画面拖动控制) 回复 data 仅含 result
+
+#### TC-PAYLOAD-010：camera_aim 双击成为 AIM
+- **给定**：平台通过 services 下发 `{"method":"camera_aim","data":{"payload_index":"39-0-7","camera_type":"zoom","locked":true,"x":0.5,"y":0.5}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`camera_aim`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—双击成为 AIM](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-双击成为-aim) 回复 data 仅含 result
+
+#### TC-PAYLOAD-011：camera_focal_length_set 变焦
+- **给定**：平台通过 services 下发 `{"method":"camera_focal_length_set","data":{"payload_index":"39-0-7","camera_type":"zoom","zoom_factor":5}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`camera_focal_length_set`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—变焦](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-变焦) 回复 data 仅含 result
+
+#### TC-PAYLOAD-012：gimbal_reset 重置云台
+- **给定**：平台通过 services 下发 `{"method":"gimbal_reset","data":{"payload_index":"39-0-7","reset_mode":0}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`gimbal_reset`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—重置云台](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-重置云台) 回复 data 仅含 result
+
+#### TC-PAYLOAD-013：camera_look_at Look At
+- **给定**：平台通过 services 下发 `{"method":"camera_look_at","data":{"payload_index":"39-0-7","locked":true,"latitude":12.23,"longitude":12.23,"height":100}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`camera_look_at`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—Look At](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-look-at) 回复 data 仅含 result
+
+#### TC-PAYLOAD-014：camera_screen_split 分屏
+- **给定**：平台通过 services 下发 `{"method":"camera_screen_split","data":{"payload_index":"39-0-7","enable":true}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`camera_screen_split`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—分屏](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-分屏) 回复 data 仅含 result
+
+#### TC-PAYLOAD-015：photo_storage_set 照片存储设置
+- **给定**：平台通过 services 下发 `{"method":"photo_storage_set","data":{"payload_index":"39-0-7","photo_storage_settings":["current","vision","ir"]}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`photo_storage_set`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—照片存储设置](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-照片存储设置) 回复 data 仅含 result
+
+#### TC-PAYLOAD-016：video_storage_set 视频存储设置
+- **给定**：平台通过 services 下发 `{"method":"video_storage_set","data":{"payload_index":"39-0-7","video_storage_settings":["current","wide","zoom","ir"]}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`video_storage_set`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—视频存储设置](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-视频存储设置) 回复 data 仅含 result
+
+#### TC-PAYLOAD-017：camera_exposure_mode_set 相机曝光模式设置
+- **给定**：平台通过 services 下发 `{"method":"camera_exposure_mode_set","data":{"payload_index":"39-0-7","camera_type":"zoom","exposure_mode":1}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`camera_exposure_mode_set`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—相机曝光模式设置](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-相机曝光模式设置) 回复 data 仅含 result
+
+#### TC-PAYLOAD-018：camera_exposure_set 相机曝光值调节
+- **给定**：平台通过 services 下发 `{"method":"camera_exposure_set","data":{"payload_index":"39-0-7","camera_type":"zoom","exposure_value":"5"}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`camera_exposure_set`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—相机曝光值调节](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-相机曝光值调节) 回复 data 仅含 result
+
+#### TC-PAYLOAD-019：camera_focus_mode_set 相机对焦模式设置
+- **给定**：平台通过 services 下发 `{"method":"camera_focus_mode_set","data":{"payload_index":"39-0-7","camera_type":"zoom","focus_mode":1}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`camera_focus_mode_set`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—相机对焦模式设置](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-相机对焦模式设置) 回复 data 仅含 result
+
+#### TC-PAYLOAD-020：camera_focus_value_set 相机对焦值设置
+- **给定**：平台通过 services 下发 `{"method":"camera_focus_value_set","data":{"payload_index":"39-0-7","camera_type":"zoom","focus_value":5}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`camera_focus_value_set`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—相机对焦值设置](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-相机对焦值设置) 回复 data 仅含 result
+
+#### TC-PAYLOAD-021：camera_point_focus_action 点对焦
+- **给定**：平台通过 services 下发 `{"method":"camera_point_focus_action","data":{"payload_index":"39-0-7","camera_type":"zoom","x":0.5,"y":0.5}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`camera_point_focus_action`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—点对焦](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-点对焦) 回复 data 仅含 result
+
+#### TC-PAYLOAD-022：ir_metering_mode_set 红外测温模式设置
+- **给定**：平台通过 services 下发 `{"method":"ir_metering_mode_set","data":{"payload_index":"39-0-7","mode":1}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`ir_metering_mode_set`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—红外测温模式设置](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-红外测温模式设置) 回复 data 仅含 result
+
+#### TC-PAYLOAD-023：ir_metering_point_set 红外测温点设置
+- **给定**：平台通过 services 下发 `{"method":"ir_metering_point_set","data":{"payload_index":"39-0-7","x":0.5,"y":0.5}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`ir_metering_point_set`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—红外测温点设置](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-红外测温点设置) 回复 data 仅含 result
+
+#### TC-PAYLOAD-024：ir_metering_area_set 红外测温区域设置
+- **给定**：平台通过 services 下发 `{"method":"ir_metering_area_set","data":{"payload_index":"39-0-7","x":0.5,"y":0.5,"width":0.5,"height":0.5}}`
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，method=`ir_metering_area_set`，data.result=0（无 output）
+- **核实依据**：[Dock3 drc.html 负载控制—红外测温区域设置](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html#负载控制-红外测温区域设置) 回复 data 仅含 result
+
+#### TC-PAYLOAD-025：负载控制枚举值校验
+- **给定**：平台通过 services 下发负载控制指令，data 中包含非法枚举值
+- **当**：模拟器收到指令
+- **那么**：立即回 `services_reply`，data.result=1（命令处理失败）
+- **那么**：记录 P-10 诊断日志（"非法枚举值"），告知平台下发了设备不认同的数据
+- **那么**：不执行指令的业务逻辑（不更新 DeviceState 等）
+- **校验范围**（依据 DJI 文档各指令枚举约束）：
+  - `camera_frame_zoom`/`camera_aim`/`camera_focal_length_set`：camera_type ∈ {ir, wide, zoom}
+  - `camera_point_focus_action`：camera_type ∈ {wide, zoom}（DJI 文档：仅可见光镜头支持点对焦）
+  - `camera_mode_switch`：camera_mode ∈ {0, 1, 2, 3}
+  - `gimbal_reset`：reset_mode ∈ {0, 1, 2, 3}
+  - `photo_storage_set`：photo_storage_settings ∈ {current, vision, ir}
+  - `video_storage_set`：video_storage_settings ∈ {current, wide, zoom, ir}
+  - `camera_exposure_mode_set`：camera_type ∈ {wide, zoom}（不含 ir），exposure_mode ∈ {1, 2, 3, 4}
+  - `camera_exposure_set`：camera_type ∈ {wide, zoom}，exposure_value ∈ {"1"~"31", "255"}
+  - `camera_focus_mode_set`：camera_type ∈ {wide, zoom}，focus_mode ∈ {0, 1, 2}
+  - `camera_focus_value_set`：camera_type ∈ {wide, zoom}
+  - `ir_metering_mode_set`：mode ∈ {0, 1, 2}
+- **示例**：`{"method":"camera_mode_switch","data":{"payload_index":"39-0-7","camera_mode":9}}` → result=1 + P-10
+- **核实依据**：[Dock2 drc.html 负载控制](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/drc.html) 各指令枚举约束；设计文档 §8.5"命令处理失败返回 result=1"
+
+### 2.18 远程调试（cmd.html）
 
 > 设计背景：DJI Cloud API「远程调试」走 services/services_reply + events topic，分为同步指令（cmd，仅 services_reply）和异步任务（job，services_reply + events 进度）。
 >
@@ -1481,7 +1946,7 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **那么**：使用 RemoteDebugSimulator 的专用进度事件序列（in_progress → ok + percent + 状态同步）
 - **核实依据**：AsyncCommandSimulator 仅发终态 status=ok 无中间进度，不符合 DJI 文档的 in_progress → ok 流转
 
-### 2.18 直播功能（live.html）
+### 2.19 直播功能（live.html）
 
 > 设计背景：DJI Cloud API「直播功能」走 services/services_reply topic，全部为同步指令（无 Events 进度事件）。
 >
@@ -1590,7 +2055,7 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **那么**：所有 ffmpeg 进程被 destroy，无进程泄漏
 - **核实依据**：防止进程泄漏，确保应用关闭后无残留 ffmpeg 进程占用资源
 
-### 2.19 媒体管理（media.html / file.html）
+### 2.20 媒体管理（media.html / file.html）
 
 > 设计背景：DJI Cloud API「媒体管理」走 events + services + requests 三种 topic，三 Dock 协议完全一致（无差异）。
 > - Event 上行：`file_upload_callback`（文件上传结果，need_reply=1）、`highest_priority_upload_flighttask_media`（优先级上报，need_reply=1）
@@ -1706,7 +2171,7 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **那么**：endpoint 无法识别时回退到 region 字段；均为空时默认 `us-east-1`
 - **错误后果**：使用短格式 region（如 `hz`）可能导致 S3 签名校验失败，OSS 返回 403
 
-### 2.20 航线管理（wayline.html）
+### 2.21 航线管理（wayline.html）
 
 > 设计背景：DJI Cloud API「航线管理」走 services（下行）+ events（上行），三 Dock 协议**存在差异**（与媒体管理不同）。
 > - Service 下行：`flighttask_prepare`/`flighttask_execute`/`flighttask_pause`/`flighttask_recovery`/`flighttask_undo`/`flighttask_stop`/`return_home`/`return_home_cancel`/`return_specific_home`/`flight_setup_abort`
@@ -1904,7 +2369,7 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **那么**：不重置无人机位置、不修改 `droneModeCode`、不上报 `flighttask_progress`（status=canceled）
 - **核实依据**：[Dock1 wayline.html 取消准备中的任务](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html) 返回码 326108 原文：「当前状态不支持」
 
-### 2.21 机场位置与无人机位置
+### 2.22 机场位置与无人机位置
 
 > 设计背景：模拟器需对接第三方平台的航线任务，机场位置（起飞点/返航点）应可调整。
 > 支持两种位置输入模式：地图模式（高德地图选点 + 自动获取海拔）和手动模式（直接输入经纬度+高度）。
@@ -1955,6 +2420,16 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **给定**：任务执行完成（`completeTask()` 调用）
 - **当**：无人机归舱
 - **那么**：`droneLatitude=机场纬度, droneLongitude=机场经度, droneHeight=0`（避免前端显示残留的飞行中偏移位置）
+
+#### TC-LOC-016：return_home 后无人机位置更新到机场
+- **给定**：无人机在飞行中（`mode_code` 为飞行态，位置偏离机场）
+- **当**：云端下发 `return_home`
+- **那么**：回 services_reply `result=0`，立即设置 `mode_code=9`（自动返航）
+- **那么**：停止当前航线任务进度（若在执行中）
+- **那么**：记录 M-2 诊断日志（return_home 后续行为：不发 return_home_info + 无进度上报，DJI 文档未明确，待真机验证）
+- **当**：返航延迟时间到达后（模拟返航飞行）
+- **那么**：`droneLatitude=机场纬度, droneLongitude=机场经度, droneHeight=0, mode_code=0, droneInDock=true`
+- **说明**：延迟更新而非立即更新，使平台可观察到 `mode_code=9`（返航模式）→ `mode_code=0`（待机）的状态过渡，与真实返航行为一致
 
 #### TC-LOC-007：无人机位置 REST API
 - **给定**：模拟器运行中
@@ -2024,7 +2499,7 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **那么**：Drone OSD **不上报**（`isDroneActivated()` 为 false，跳过推送）
 - **前端展示**：纬度/经度/高度显示 `-`，状态显示"未知"
 
-### 2.22 覆盖率报告
+### 2.23 覆盖率报告
 
 > 设计背景：覆盖率报告用于发现"第三方平台对 DJI Cloud API 接口的访问覆盖情况"，重点是列出**未被覆盖的清单**。
 > 覆盖率测试往往跨多次连接（切换平台/重连），需保留累积数据。
@@ -2098,7 +2573,7 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **那么**：点击「下载 HTML 报告」触发浏览器下载对应地址的 HTML 报告
 - **核实依据**：用户约定"在模拟器和监控器共同的日志区域增加报告下载按钮"
 
-### 2.23 Pilot to Cloud
+### 2.24 Pilot to Cloud
 
 > Pilot to Cloud 是 DJI Cloud API 的另一种设备接入方式，网关设备为遥控器（DJI RC Plus / RC Plus 2 / RC Pro 行业版），通过 JSBridge + MQTT 接入云平台。
 > 与 Dock to Cloud（机场上云）共享 MQTT Topic 结构和消息格式，但在接入方式、注册流程、航线管理等方面存在差异。
