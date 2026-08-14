@@ -24,6 +24,7 @@ import ltd.cdmi.hivemind.simulator.config.SimulatorProperties;
 import ltd.cdmi.hivemind.simulator.device.DeviceState;
 import ltd.cdmi.hivemind.simulator.device.DeviceType;
 import ltd.cdmi.hivemind.simulator.handler.RemoteDebugSimulator;
+import ltd.cdmi.hivemind.simulator.mqtt.DockTopicSchema;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
@@ -47,8 +48,11 @@ class RemoteDebugSimulatorTest {
         return new SimulatorProperties(
                 new SimulatorProperties.Location(30.67, 104.07, 500.0),
                 new SimulatorProperties.Log(2000),
-                new SimulatorProperties.Live(false, "", ""),
-                new SimulatorProperties.Media("")
+                new SimulatorProperties.Live(false, "", "", null),
+                new SimulatorProperties.Media("", false, 0, false, 0),
+                null,
+                null,
+                null
         );
     }
 
@@ -59,7 +63,7 @@ class RemoteDebugSimulatorTest {
     private RemoteDebugSimulator createSimulator(DeviceType dockType, DeviceState state, MqttClientManager mqtt) {
         RuntimeConfig runtimeConfig = new RuntimeConfig(testMqttProps(), testProps(), new LiveConfigStore());
         runtimeConfig.setDockType(dockType);
-        return new RemoteDebugSimulator(mqtt, state, runtimeConfig);
+        return new RemoteDebugSimulator(mqtt, state, runtimeConfig, new DockTopicSchema());
     }
 
     // ==================== Dock1 putter_open ====================

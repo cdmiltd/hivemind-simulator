@@ -17,8 +17,8 @@ package ltd.cdmi.hivemind.simulator.handler;
 
 import ltd.cdmi.hivemind.simulator.config.RuntimeConfig;
 import ltd.cdmi.hivemind.simulator.device.DeviceState;
+import ltd.cdmi.hivemind.simulator.mqtt.DockTopicSchema;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
-import ltd.cdmi.hivemind.simulator.mqtt.TopicConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -55,11 +55,14 @@ public class HmsSimulator {
     private final MqttClientManager mqtt;
     private final DeviceState state;
     private final RuntimeConfig runtimeConfig;
+    private final DockTopicSchema dockTopicSchema;
 
-    public HmsSimulator(MqttClientManager mqtt, DeviceState state, RuntimeConfig runtimeConfig) {
+    public HmsSimulator(MqttClientManager mqtt, DeviceState state, RuntimeConfig runtimeConfig,
+                        DockTopicSchema dockTopicSchema) {
         this.mqtt = mqtt;
         this.state = state;
         this.runtimeConfig = runtimeConfig;
+        this.dockTopicSchema = dockTopicSchema;
     }
 
     /**
@@ -169,7 +172,7 @@ public class HmsSimulator {
         envelope.put("method", "hms");
         envelope.put("data", data);
 
-        String topic = TopicConstants.topic(TopicConstants.EVENTS, runtimeConfig.getDockSn());
+        String topic = dockTopicSchema.topic(dockTopicSchema.events(), runtimeConfig.getDockSn());
         mqtt.publishJson(topic, envelope);
     }
 

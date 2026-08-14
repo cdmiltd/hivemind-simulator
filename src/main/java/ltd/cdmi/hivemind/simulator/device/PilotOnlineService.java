@@ -20,12 +20,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import ltd.cdmi.hivemind.simulator.config.RuntimeConfig;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticCode;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
+import ltd.cdmi.hivemind.simulator.handler.MapElementSimulator;
+import ltd.cdmi.hivemind.simulator.handler.SituationAwarenessSimulator;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
-import ltd.cdmi.hivemind.simulator.mqtt.TopicConstants;
+import ltd.cdmi.hivemind.simulator.mqtt.PilotTopicSchema;
+import ltd.cdmi.hivemind.simulator.mqtt.TopicSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -58,28 +62,49 @@ public class PilotOnlineService {
     private final ObjectMapper objectMapper;
     private final RuntimeConfig runtimeConfig;
     private final DiagnosticLogRecorder diagnosticRecorder;
+    private final List<DroneStateBuilder> stateBuilders;
+    private final TopicSchema topicSchema;
+    private final MapElementSimulator mapElementSimulator;
+    private final SituationAwarenessSimulator situationAwarenessSimulator;
 
     /** tid → CompletableFuture，用于等待 status_reply */
     private final ConcurrentHashMap<String, CompletableFuture<JsonNode>> pendingReplies = new ConcurrentHashMap<>();
 
+    /** 已注册 status_reply 监听器的 controllerSn（controllerSn 变化时需重新注册） */
+    private volatile String registeredReplyControllerSn;
+
     public PilotOnlineService(MqttClientManager mqtt, DeviceState state,
                               ObjectMapper objectMapper, RuntimeConfig runtimeConfig,
-                              DiagnosticLogRecorder diagnosticRecorder) {
+                              DiagnosticLogRecorder diagnosticRecorder,
+                              List<DroneStateBuilder> stateBuilders,
+                              MapElementSimulator mapElementSimulator,
+                              SituationAwarenessSimulator situationAwarenessSimulator) {
         this.mqtt = mqtt;
         this.state = state;
         this.objectMapper = objectMapper;
         this.runtimeConfig = runtimeConfig;
         this.diagnosticRecorder = diagnosticRecorder;
-        registerListeners();
+        this.stateBuilders = stateBuilders;
+        this.topicSchema = new PilotTopicSchema(runtimeConfig.getControllerType());
+        this.mapElementSimulator = mapElementSimulator;
+        this.situationAwarenessSimulator = situationAwarenessSimulator;
+        ensureReplyListeners();
     }
 
     /**
-     * 注册 status_reply 监听器，匹配 tid 完成等待。
+     * 确保 status_reply 监听器已注册（controllerSn 变化时重新注册）。
+     * <p>切换 Pilot 设备类型时 {@link RuntimeConfig#setControllerType} 会自动更新 controllerSn，
+     * 此方法确保监听器始终绑定当前 controllerSn 对应的 topic。</p>
      * <p>Pilot 模式无注册流程，不需要 requests_reply 监听器。</p>
      */
-    private void registerListeners() {
+    private void ensureReplyListeners() {
         String controllerSn = runtimeConfig.getControllerSn();
-        mqtt.addListener(TopicConstants.topic(TopicConstants.STATUS_REPLY, controllerSn), this::handleReply);
+        if (controllerSn.equals(registeredReplyControllerSn)) {
+            return;
+        }
+        mqtt.addListener(topicSchema.topic(topicSchema.statusReply(), controllerSn), this::handleReply);
+        registeredReplyControllerSn = controllerSn;
+        log.info("PilotOnlineService 已注册 status_reply 监听器: controllerSn={}", controllerSn);
     }
 
     /**
@@ -131,6 +156,12 @@ public class PilotOnlineService {
             // Pilot 模式飞行器始终激活（遥控器直接控制，无收纳概念）
             state.setDroneActivated(true);
             publishLiveCapacity();
+            publishControllerState();
+            publishDroneState();
+            // Pilot 上线后拉取地图元素列表（DJI 时序图：首次登录拉取全部地图元素）
+            mapElementSimulator.init();
+            // Pilot 首次上线后主动获取设备拓扑列表（DJI 文档：获取工作空间下所有设备列表及拓扑）
+            situationAwarenessSimulator.init();
             log.info("Pilot 上线流程完成: controllerSn={}, droneSn={}",
                     runtimeConfig.getControllerSn(), runtimeConfig.getDroneSn());
             return DockOnlineService.OnlineResult.ok();
@@ -150,11 +181,16 @@ public class PilotOnlineService {
             return;
         }
         state.setOnline(false);
+        // Pilot 下线时清理地图元素模拟器
+        mapElementSimulator.destroy();
 
         String tid = UUID.randomUUID().toString();
         String bid = UUID.randomUUID().toString();
         Map<String, Object> data = new LinkedHashMap<>();
-        data.put("domain", String.valueOf(runtimeConfig.getControllerType().getDomain()));
+        // RC Plus 2 行业版差异（TC-ONLINE-016）：网关设备不上报 domain
+        if (runtimeConfig.getControllerType() != DeviceType.RC_PLUS_2) {
+            data.put("domain", String.valueOf(runtimeConfig.getControllerType().getDomain()));
+        }
         data.put("type", runtimeConfig.getControllerType().getType());
         data.put("sub_type", runtimeConfig.getControllerType().getSubType());
         data.put("device_secret", "secret");
@@ -183,30 +219,46 @@ public class PilotOnlineService {
     private Map<String, Object> buildUpdateTopoData() {
         DeviceType controllerType = runtimeConfig.getControllerType();
         DeviceType droneType = runtimeConfig.getDroneType();
+        boolean isRcPlus2 = (controllerType == DeviceType.RC_PLUS_2);
 
         // DJI update_topo: data 顶层包含网关设备的 domain（string）、type（int）、sub_type（int）、
         // device_secret（text）、nonce（text）、thing_version（text）
+        // RC Plus 2 行业版差异（TC-ONLINE-016）：网关设备不上报 domain，子设备不上报 domain 和 index
         // Pilot 模式飞行器始终激活，sub_devices 始终包含飞行器
         Map<String, Object> data = new LinkedHashMap<>();
-        data.put("domain", String.valueOf(controllerType.getDomain()));
+        if (!isRcPlus2) {
+            data.put("domain", String.valueOf(controllerType.getDomain()));
+        }
         data.put("type", controllerType.getType());
         data.put("sub_type", controllerType.getSubType());
         data.put("device_secret", "secret");
         data.put("nonce", "nonce");
         data.put("sub_devices", List.of(
-                Map.of(
-                        "sn", runtimeConfig.getDroneSn(),
-                        "domain", String.valueOf(droneType.getDomain()),
-                        "type", droneType.getType(),
-                        "sub_type", droneType.getSubType(),
-                        "index", "A",
-                        "device_secret", "secret",
-                        "nonce", "nonce",
-                        "thing_version", "3.0.0.0"
-                )
+                buildSubDeviceData(droneType, isRcPlus2)
         ));
         data.put("thing_version", "3.0.0.0");
         return data;
+    }
+
+    /**
+     * 构造子设备（飞行器）的 update_topo 数据。
+     * <p>RC Plus 2 行业版不上报 domain 和 index 字段（TC-ONLINE-016）。</p>
+     */
+    private Map<String, Object> buildSubDeviceData(DeviceType droneType, boolean isRcPlus2) {
+        Map<String, Object> sub = new LinkedHashMap<>();
+        sub.put("sn", runtimeConfig.getDroneSn());
+        if (!isRcPlus2) {
+            sub.put("domain", String.valueOf(droneType.getDomain()));
+        }
+        sub.put("type", droneType.getType());
+        sub.put("sub_type", droneType.getSubType());
+        if (!isRcPlus2) {
+            sub.put("index", "A");
+        }
+        sub.put("device_secret", "secret");
+        sub.put("nonce", "nonce");
+        sub.put("thing_version", "3.0.0.0");
+        return sub;
     }
 
     /**
@@ -224,6 +276,7 @@ public class PilotOnlineService {
     }
 
     private boolean sendUpdateTopo() {
+        ensureReplyListeners();
         String tid = UUID.randomUUID().toString();
         String bid = UUID.randomUUID().toString();
 
@@ -262,7 +315,7 @@ public class PilotOnlineService {
         envelope.put("tid", tid);
         envelope.put("timestamp", System.currentTimeMillis());
         envelope.put("method", method);
-        String topic = TopicConstants.topic(TopicConstants.STATUS, runtimeConfig.getControllerSn());
+        String topic = topicSchema.topic(topicSchema.status(), runtimeConfig.getControllerSn());
         mqtt.publishJson(topic, envelope);
         log.info("已发送 status: method={}, tid={}", method, tid);
     }
@@ -314,8 +367,113 @@ public class PilotOnlineService {
         envelope.put("gateway", runtimeConfig.getControllerSn());
         envelope.put("data", data);
 
-        String topic = TopicConstants.topic(TopicConstants.STATE, runtimeConfig.getControllerSn());
+        String topic = topicSchema.topic(topicSchema.state(), runtimeConfig.getControllerSn());
         mqtt.publishJson(topic, envelope);
         log.info("已上报 live_capacity（state topic）");
+    }
+
+    /**
+     * 推送遥控器 state 属性到 thing/product/{controllerSn}/state。
+     * <p>上线后调用，推送所有 pushMode=1 的遥控器属性初始值（live_capacity 已由 publishLiveCapacity 独立上报）。
+     * <p>对齐 RC Plus 2 设备属性文档，pushMode=1 的属性在状态变化时上报：
+     * <a href="https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/properties.html">RC Plus 2 设备属性</a></p>
+     * <p>核实依据：用户提供的 RC Plus 2 行业版设备属性列表（pushMode=1 字段集）</p>
+     */
+    void publishControllerState() {
+        Map<String, Object> data = new LinkedHashMap<>();
+
+        // dongle_infos — 4G Dongle 信息（pushMode=1, r）
+        data.put("dongle_infos", buildDongleInfos());
+
+        // live_status — 网关当前整体直播状态推送（pushMode=1, r）
+        // 无直播时为空数组
+        data.put("live_status", List.of());
+
+        // firmware_version — 固件版本（pushMode=1, r）
+        data.put("firmware_version", "0.0.0.0");
+
+        // cloud_control_auth — 本遥控器授权云控列表（pushMode=1, r）
+        // 无授权时为空数组
+        data.put("cloud_control_auth", List.of());
+
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("bid", UUID.randomUUID().toString());
+        envelope.put("tid", UUID.randomUUID().toString());
+        envelope.put("timestamp", System.currentTimeMillis());
+        envelope.put("gateway", runtimeConfig.getControllerSn());
+        envelope.put("data", data);
+
+        String topic = topicSchema.topic(topicSchema.state(), runtimeConfig.getControllerSn());
+        mqtt.publishJson(topic, envelope);
+        log.info("已推送遥控器 state 属性（state topic）");
+    }
+
+    /**
+     * 构造 4G Dongle 信息数组（dongle_infos）。
+     * <p>结构与 M400 Pilot 模式 dongle_infos 一致（DJI Cloud API 通用 Dongle 信息结构）。</p>
+     * <p>模拟值：1 个支持 eSIM 的新 Dongle，已激活，使用 eSIM（移动运营商）。</p>
+     */
+    private List<Map<String, Object>> buildDongleInfos() {
+        List<Map<String, Object>> dongleInfos = new ArrayList<>();
+        Map<String, Object> dongle = new LinkedHashMap<>();
+        dongle.put("imei", "000000000000000");
+        dongle.put("dongle_type", 10);        // 10=支持 eSIM 的新 Dongle
+        dongle.put("eid", "00000000000000000000000000000000");
+        dongle.put("esim_activate_state", 1); // 1=已激活
+        dongle.put("sim_card_state", 1);      // 1=已插入
+        dongle.put("sim_slot", 2);            // 2=eSIM
+        // esim_infos — eSIM 信息数组
+        List<Map<String, Object>> esimInfos = new ArrayList<>();
+        Map<String, Object> esim = new LinkedHashMap<>();
+        esim.put("telecom_operator", 1);      // 1=移动
+        esim.put("enabled", true);
+        esim.put("iccid", "0000000000000000000");
+        esimInfos.add(esim);
+        dongle.put("esim_infos", esimInfos);
+        // sim_info — 实体 SIM 卡信息
+        Map<String, Object> simInfo = new LinkedHashMap<>();
+        simInfo.put("telecom_operator", 0);   // 0=未知
+        simInfo.put("sim_type", 0);           // 0=未知
+        simInfo.put("iccid", "");
+        dongle.put("sim_info", simInfo);
+        dongleInfos.add(dongle);
+        return dongleInfos;
+    }
+
+    /**
+     * 推送飞行器 state 属性到 thing/product/{droneSn}/state。
+     * <p>上线后调用，推送所有 pushMode=1 的飞行器属性初始值。</p>
+     * <p>通过 {@link DroneStateBuilder} 按机型区分 state 字段集：
+     * <ul>
+     *   <li>Mavic 3E/3T → {@link Mavic3StateBuilder}（含 firmware_version，pushMode=1）</li>
+     *   <li>M400/M4E/M4T → {@link M4StateBuilder}（不含 firmware_version，含 commander_flight_*、rth_mode、offline_map_enable）</li>
+     * </ul>
+     * <p>找不到对应 Builder 时跳过 state 上报并记录警告（避免上报错误字段集）。</p>
+     */
+    void publishDroneState() {
+        DeviceType droneType = runtimeConfig.getDroneType();
+        DroneStateBuilder builder = null;
+        for (DroneStateBuilder b : stateBuilders) {
+            if (b.supports(droneType)) {
+                builder = b;
+                break;
+            }
+        }
+        if (builder == null) {
+            log.warn("未找到 {} 的 DroneStateBuilder，跳过飞行器 state 上报", droneType);
+            return;
+        }
+
+        Map<String, Object> data = builder.buildDroneState(runtimeConfig);
+
+        Map<String, Object> envelope = new LinkedHashMap<>();
+        envelope.put("bid", UUID.randomUUID().toString());
+        envelope.put("tid", UUID.randomUUID().toString());
+        envelope.put("timestamp", System.currentTimeMillis());
+        envelope.put("data", data);
+
+        String topic = topicSchema.topic(topicSchema.state(), runtimeConfig.getDroneSn());
+        mqtt.publishJson(topic, envelope);
+        log.info("已推送飞行器 state 属性（state topic），builder={}", builder.aircraftFamily());
     }
 }

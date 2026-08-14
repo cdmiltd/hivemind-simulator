@@ -583,6 +583,7 @@
                         </el-radio-group>
                         <el-switch v-model="autoScroll" active-text="自动滚动" size="small"></el-switch>
                         <el-button size="small" @click="clearLogs">清空</el-button>
+                        <el-button size="small" @click="exportOsd" :disabled="!selectedDevice">导出OSD</el-button>
                     </div>
                 </div>
                 <div class="log-container" ref="logContainer">
@@ -1638,6 +1639,16 @@ createApp({
             await refreshMonitorLogs();
         }
 
+        // 导出 OSD 日志数据（新窗口打开 JSON，替代外部 PowerShell 脚本）
+        function exportOsd() {
+            // 传网关 SN + 飞行器 SN，与 filteredLogs 的过滤逻辑一致
+            const sns = [selectedDevice.value, currentDevice.value?.droneSn]
+                .filter(sn => sn && sn.trim())
+                .filter((sn, i, arr) => arr.indexOf(sn) === i);
+            if (sns.length === 0) { ElMessage.warning('请先选择设备'); return; }
+            window.open(`/api/monitor/logs/osd-export?sn=${encodeURIComponent(sns.join(','))}&direction=recv`, '_blank');
+        }
+
         const filteredLogs = computed(() => {
             const gatewaySn = selectedDevice.value;
             const droneSn = currentDevice.value?.droneSn;
@@ -1716,7 +1727,7 @@ createApp({
             logs, logFilter, autoScroll, expandedLogs, logContainer,
             topicFilter, topicOptions, filteredLogs,
             showMsgDrawer, currentMessage, formattedPayload, payloadTruncated,
-            openMessageDetail, copyPayload, clearLogs,
+            openMessageDetail, copyPayload, clearLogs, exportOsd,
             showCoverageDialog, coverageHosts, coverageSelectedHost, coverageData, coverageRateText,
             openCoverageDialog, loadCoverageHosts, loadCoverageData, downloadCoverageReport,
         };

@@ -22,7 +22,8 @@ import java.util.Map;
  * 机场 OSD 字段集构造策略，按 Dock 版本划分字段集。
  * <p>与 {@link OsdStrategy}（字段命名风格）正交：OsdStrategy 管字段"怎么命名"，
  * DockOsdBuilder 管字段"有哪些"。OsdStrategy 通过 {@link OsdContext} 注入复用。</p>
- * <p>对齐 DJI 文档「机场的设备属性推送是分多条推送的」：{@link #buildDockOsd(OsdContext)}
+ * <p>对齐 DJI 文档「机场的设备属性推送是分多条推送的」（Dock3 properties 文档「设备属性推送」章节）：
+ * {@link #buildDockOsd(OsdContext)}
  * 返回多条 OSD data，每条为一组字段的定频上报内容，由 {@link DeviceSimulator} 分别包装 envelope 发布。</p>
  * <p>参考：<a href="https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/properties.html">Dock1 properties</a>、
  * <a href="https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/properties.html">Dock2 properties</a>、
@@ -46,7 +47,7 @@ public interface DockOsdBuilder {
 
     /**
      * 构造机场 OSD 数据（不含 envelope，由 {@link DeviceSimulator} 包装）。
-     * <p>对齐 DJI 文档「机场的设备属性推送是分多条推送的」，返回多条 OSD data，
+     * <p>对齐 DJI 文档「机场的设备属性推送是分多条推送的」（Dock3 properties 文档「设备属性推送」章节），返回多条 OSD data，
      * 每条为一组字段的定频上报内容。{@link DeviceSimulator} 对每条 data 分别包装 envelope 发布到 osd topic。</p>
      *
      * @param ctx OSD 上下文，提供状态、配置、命名策略

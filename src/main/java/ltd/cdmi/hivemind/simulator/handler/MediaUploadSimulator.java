@@ -21,8 +21,8 @@ import jakarta.annotation.PostConstruct;
 import ltd.cdmi.hivemind.simulator.config.RuntimeConfig;
 import ltd.cdmi.hivemind.simulator.config.SimulatorProperties;
 import ltd.cdmi.hivemind.simulator.device.DockOnlineService;
+import ltd.cdmi.hivemind.simulator.mqtt.DockTopicSchema;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
-import ltd.cdmi.hivemind.simulator.mqtt.TopicConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -71,6 +71,7 @@ public class MediaUploadSimulator {
     private final ServiceCommandHandler commandHandler;
     private final MediaUploader mediaUploader;
     private final RuntimeConfig runtimeConfig;
+    private final DockTopicSchema dockTopicSchema;
 
     /** 已上报的媒体文件列表（供 Web 控制台展示） */
     private final List<Map<String, Object>> uploadedFiles = new CopyOnWriteArrayList<>();
@@ -79,10 +80,14 @@ public class MediaUploadSimulator {
     /** 当前最高优先级 flight_id（upload_flighttask_media_prioritize 设置） */
     private volatile String priorityFlightId;
 
+    /** 已注册 events_reply 监听器的 dockSn（dockSn 变化时需重新注册） */
+    private volatile String registeredReplyDockSn;
+
     public MediaUploadSimulator(SimulatorProperties props, MqttClientManager mqtt,
                                 ObjectMapper objectMapper, DockOnlineService onlineService,
                                 ServiceCommandHandler commandHandler,
-                                MediaUploader mediaUploader, RuntimeConfig runtimeConfig) {
+                                MediaUploader mediaUploader, RuntimeConfig runtimeConfig,
+                                DockTopicSchema dockTopicSchema) {
         this.props = props;
         this.mqtt = mqtt;
         this.objectMapper = objectMapper;
@@ -90,16 +95,24 @@ public class MediaUploadSimulator {
         this.commandHandler = commandHandler;
         this.mediaUploader = mediaUploader;
         this.runtimeConfig = runtimeConfig;
-        registerListeners();
+        this.dockTopicSchema = dockTopicSchema;
+        ensureReplyListeners();
     }
 
     /**
-     * 注册 events_reply 监听器，按 tid 匹配等待中的事件回复。
-     * <p>模式与 {@link DockOnlineService} 的 requests_reply 等待一致。</p>
+     * 确保 events_reply 监听器已注册（dockSn 变化时重新注册）。
+     * <p>切换 Dock 类型时 {@link RuntimeConfig#setDockType} 会自动更新 dockSn，
+     * 此方法确保监听器始终绑定当前 dockSn 对应的 topic。</p>
+     * <p>模式与 {@link DockOnlineService#ensureReplyListeners} 一致。</p>
      */
-    private void registerListeners() {
+    private void ensureReplyListeners() {
         String dockSn = runtimeConfig.getDockSn();
-        mqtt.addListener(TopicConstants.topic(TopicConstants.EVENTS_REPLY, dockSn), this::handleEventReply);
+        if (dockSn.equals(registeredReplyDockSn)) {
+            return;
+        }
+        mqtt.addListener(dockTopicSchema.topic(dockTopicSchema.eventsReply(), dockSn), this::handleEventReply);
+        registeredReplyDockSn = dockSn;
+        log.info("MediaUploadSimulator 已注册 events_reply 监听器: dockSn={}", dockSn);
     }
 
     @PostConstruct
@@ -210,7 +223,7 @@ public class MediaUploadSimulator {
                 fileName = "SIM_" + flightId + "_" + (i + 1) + ".jpg";
             }
 
-            publishFileUploadCallback(flightId, fileName, i, fileCount, objectKeyPrefix);
+            publishFileUploadCallback(flightId, fileName, i, objectKeyPrefix);
             uploadedFiles.add(Map.of(
                     "flight_id", flightId,
                     "name", fileName,
@@ -252,12 +265,11 @@ public class MediaUploadSimulator {
      * 发布 file_upload_callback 事件（need_reply=1，等待 events_reply）。
      * @param flightId 任务 ID
      * @param fileName 文件名
-     * @param index 当前文件索引（从 0 开始）
-     * @param totalFiles 本次任务预期上传的文件总数
+     * @param index 当前文件索引（从 0 开始，用于生成不同的 gimbal_yaw_degree）
      * @param objectKeyPrefix 对象存储 Key 前缀（来自 storage_config_get）
      */
     private void publishFileUploadCallback(String flightId, String fileName, int index,
-                                           int totalFiles, String objectKeyPrefix) {
+                                           String objectKeyPrefix) {
         // ext 扩展信息
         Map<String, Object> ext = new LinkedHashMap<>();
         ext.put("drone_model_key", runtimeConfig.getDroneType().modelKey());
@@ -272,7 +284,7 @@ public class MediaUploadSimulator {
 
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("absolute_altitude", runtimeConfig.getLocationHeight() + 50);
-        metadata.put("create_time", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+        metadata.put("create_time", LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
         metadata.put("gimbal_yaw_degree", String.valueOf(index * 30));
         metadata.put("relative_altitude", 50.0);
         metadata.put("shoot_position", shootPosition);
@@ -286,15 +298,9 @@ public class MediaUploadSimulator {
         file.put("object_key", objectKeyPrefix + "/" + flightId + "/" + fileName);
         file.put("path", flightId);
 
-        // flight_task 字段（hivemind 据此统计文件上传计数）
-        Map<String, Object> flightTask = new LinkedHashMap<>();
-        flightTask.put("uploaded_file_count", index + 1);
-        flightTask.put("expected_file_count", totalFiles);
-
         // 完整事件 data
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("file", file);
-        data.put("flight_task", flightTask);
 
         publishEventAndWaitReply("file_upload_callback", data);
         log.info("已上报媒体文件: flightId={}, file={}", flightId, fileName);
@@ -307,6 +313,7 @@ public class MediaUploadSimulator {
      * @param data 事件 data
      */
     private void publishEventAndWaitReply(String method, Map<String, Object> data) {
+        ensureReplyListeners();
         String tid = UUID.randomUUID().toString();
         String bid = UUID.randomUUID().toString();
 
@@ -323,7 +330,7 @@ public class MediaUploadSimulator {
         CompletableFuture<JsonNode> future = new CompletableFuture<>();
         pendingEventReplies.put(tid, future);
 
-        String topic = TopicConstants.topic(TopicConstants.EVENTS, runtimeConfig.getDockSn());
+        String topic = dockTopicSchema.topic(dockTopicSchema.events(), runtimeConfig.getDockSn());
         mqtt.publishJson(topic, envelope);
 
         // 等待 events_reply

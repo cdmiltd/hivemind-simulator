@@ -22,9 +22,9 @@ import ltd.cdmi.hivemind.simulator.config.RuntimeConfig;
 import ltd.cdmi.hivemind.simulator.config.SimulatorProperties;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticCode;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
+import ltd.cdmi.hivemind.simulator.mqtt.DockTopicSchema;
 import ltd.cdmi.hivemind.simulator.mqtt.DrcMessage;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
-import ltd.cdmi.hivemind.simulator.mqtt.TopicConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -62,6 +62,7 @@ public class DeviceSimulator {
     private final List<DroneOsdBuilder> droneBuilders;
     private final List<ControllerOsdBuilder> controllerBuilders;
     private final DiagnosticLogRecorder diagnosticRecorder;
+    private final DockTopicSchema dockTopicSchema;
 
     private ScheduledExecutorService scheduler;
 
@@ -71,7 +72,8 @@ public class DeviceSimulator {
                            List<DockOsdBuilder> dockBuilders,
                            List<DroneOsdBuilder> droneBuilders,
                            List<ControllerOsdBuilder> controllerBuilders,
-                           DiagnosticLogRecorder diagnosticRecorder) {
+                           DiagnosticLogRecorder diagnosticRecorder,
+                           DockTopicSchema dockTopicSchema) {
         this.props = props;
         this.mqtt = mqtt;
         this.state = state;
@@ -82,6 +84,7 @@ public class DeviceSimulator {
         this.droneBuilders = droneBuilders;
         this.controllerBuilders = controllerBuilders;
         this.diagnosticRecorder = diagnosticRecorder;
+        this.dockTopicSchema = dockTopicSchema;
     }
 
     /**
@@ -221,11 +224,11 @@ public class DeviceSimulator {
 
             // 网关 OSD（始终推送）：Dock 模式推送 Dock OSD（分多条），Pilot 模式推送 Controller OSD（单条）
             String gatewaySn = runtimeConfig.getGatewaySn();
-            String gatewayOsdTopic = TopicConstants.topic(TopicConstants.OSD, gatewaySn);
+            String gatewayOsdTopic = dockTopicSchema.topic(dockTopicSchema.osd(), gatewaySn);
             if (runtimeConfig.getDeviceMode() == DeviceMode.PILOT) {
                 mqtt.publish(gatewayOsdTopic, wrapOsd(selectControllerBuilder().buildControllerOsd(ctx), gatewaySn));
             } else {
-                // 对齐 DJI 文档「机场的设备属性推送是分多条推送的」
+                // 对齐 DJI 文档「机场的设备属性推送是分多条推送的」（Dock3 properties 文档「设备属性推送」章节）
                 for (Map<String, Object> data : selectDockBuilder().buildDockOsd(ctx)) {
                     mqtt.publish(gatewayOsdTopic, wrapOsd(data, gatewaySn));
                 }
@@ -233,7 +236,7 @@ public class DeviceSimulator {
 
             // Drone OSD（仅飞行器激活时推送，休眠状态不推送）
             if (state.isDroneActivated()) {
-                String droneOsdTopic = TopicConstants.topic(TopicConstants.OSD, runtimeConfig.getDroneSn());
+                String droneOsdTopic = dockTopicSchema.topic(dockTopicSchema.osd(), runtimeConfig.getDroneSn());
                 mqtt.publish(droneOsdTopic, wrapOsd(selectDroneBuilder().buildDroneOsd(ctx), gatewaySn));
             }
 
@@ -252,13 +255,15 @@ public class DeviceSimulator {
      * <p>推送频率与 OSD 一致（0.5Hz），由 {@link #publishOsd()} 统一调度。</p>
      */
     private void publishDrcEvents() {
-        String drcUpTopic = TopicConstants.topic(TopicConstants.DRC_UP, runtimeConfig.getGatewaySn());
+        String drcUpTopic = dockTopicSchema.topic(dockTopicSchema.drcUp(), runtimeConfig.getGatewaySn());
 
         // drc_drone_state_push：飞行器状态
         Map<String, Object> droneState = new LinkedHashMap<>();
         droneState.put("mode_code", state.getDroneModeCode());
         droneState.put("stealth_state", state.isStealthState() ? 1 : 0);
         droneState.put("night_lights_state", state.isNightLightsState() ? 1 : 0);
+        droneState.put("landing_type", 0);
+        droneState.put("landing_protection_type", 0);
         mqtt.publishJson(drcUpTopic, DrcMessage.event("drc_drone_state_push", droneState));
 
         // drc_camera_state_push：相机状态
@@ -480,6 +485,7 @@ public class DeviceSimulator {
         Map<String, Object> irLense = new LinkedHashMap<>();
         irLense.put("screen_split_enable", false);
         irLense.put("ir_zoom_factor", 2);
+        irLense.put("thermal_current_palette_style", 11);
         irLense.put("thermal_gain_mode", 2);
         irLense.put("thermal_isotherm_state", 0);
         irLense.put("thermal_isotherm_upper_limit", 150);

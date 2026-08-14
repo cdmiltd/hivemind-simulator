@@ -41,7 +41,7 @@ import java.util.stream.Stream;
 /**
  * FFmpeg WHIP 推流器：负责检测 ffmpeg 能力并管理推流进程。
  * <p>启动时检测本机 ffmpeg 是否支持 WHIP muxer（需 ffmpeg ≥ 8.0 且编译时启用 --enable-muxer=whip）。
- * <p>仅支持 WebRTC (url_type=4)，RTMP/GB28181 不处理（降级为协议模拟）。
+ * <p>支持 RTMP (url_type=1) 和 WebRTC (url_type=4) 真实推流；Agora (url_type=0) 和 GB28181 (url_type=3) 不处理（降级为协议模拟）。
  * <p>配置来源：{@link RuntimeConfig}（yml 提供默认值，前端 REST API 可运行时覆盖，无需重启）。
  * <p>真相源：TDD-SPEC §2.18 TC-LIVE-011~015。
  * <p>核实依据：
@@ -55,8 +55,12 @@ public class FfmpegWhipPusher {
 
     private static final Logger log = LoggerFactory.getLogger(FfmpegWhipPusher.class);
 
-    /** url_type=0 表示 RTMP */
-    public static final int URL_TYPE_RTMP = 0;
+    /** url_type=0 声网 Agora（不真实推流，仅协议模拟） */
+    public static final int URL_TYPE_AGORA = 0;
+    /** url_type=1 表示 RTMP */
+    public static final int URL_TYPE_RTMP = 1;
+    /** url_type=3 GB28181（不真实推流，仅协议模拟） */
+    public static final int URL_TYPE_GB28181 = 3;
     /** url_type=4 表示 WebRTC (WHIP) */
     public static final int URL_TYPE_WEBRTC = 4;
 
@@ -121,7 +125,7 @@ public class FfmpegWhipPusher {
                 ffmpegStatus = whipSupported ? "OK" : "OK_RTMP_ONLY";
                 ffmpegError = "";
             } else {
-                log.warn("[S-4] FFmpeg 不支持 WHIP 也不支持 RTMP，降级为协议模拟: path={}", ffmpegPath);
+                log.warn("[S-4] FFmpeg 不支持 WHIP/RTMP，降级为协议模拟: path={}", ffmpegPath);
                 ffmpegStatus = "WHIP_NOT_SUPPORTED";
                 ffmpegError = "FFmpeg 可执行但不支持 WHIP/RTMP 推流。需安装普通版 ffmpeg（支持 RTMP）或特殊编译版（支持 WHIP）";
                 diagnosticRecorder.record(DiagnosticCode.SIMULATOR_FFMPEG_WHIP_NOT_SUPPORTED, "-",
@@ -155,7 +159,7 @@ public class FfmpegWhipPusher {
 
     /**
      * 执行 `ffmpeg -muxers` 同时检测 WHIP 和 RTMP(flv) muxer。
-     * @return [0]=whipSupported, [1]=rtmpSupported(flv muxer 存在)
+     * @return [0]=whipSupported, [1]=rtmpSupported(flv muxer)
      */
     private boolean[] checkMuxers(String ffmpegPath) throws IOException, InterruptedException {
         ProcessBuilder pb = new ProcessBuilder(ffmpegPath, "-muxers");
@@ -218,7 +222,7 @@ public class FfmpegWhipPusher {
 
     /**
      * 指定 url_type 是否可真实推流。
-     * @param urlType 0=RTMP, 4=WebRTC(WHIP)
+     * @param urlType 0=Agora, 1=RTMP, 3=GB28181, 4=WebRTC(WHIP)
      */
     public boolean isPushAvailable(int urlType) {
         if (!runtimeConfig.isLiveRealPushEnabled()) return false;
@@ -228,11 +232,11 @@ public class FfmpegWhipPusher {
     }
 
     /**
-     * 启动 ffmpeg 推流（根据 urlType 选择 RTMP 或 WHIP）。
+     * 启动 ffmpeg 推流（根据 urlType 选择 RTMP/WHIP）。
      * @param videoId   推流唯一标识（用于后续 stopPush）
      * @param url       推流目标 URL（RTMP: rtmp://... / WHIP: http://...）
      * @param videoFile 视频文件绝对路径
-     * @param urlType   0=RTMP, 4=WebRTC(WHIP)
+     * @param urlType   1=RTMP, 4=WebRTC(WHIP)
      * @return true=启动成功；false=启动失败或不可用
      */
     public boolean startPush(String videoId, String url, String videoFile, int urlType) {
@@ -250,13 +254,27 @@ public class FfmpegWhipPusher {
             return false;
         }
 
+        // 检查视频编码与目标协议的兼容性（-c copy 模式不转码，编码必须兼容）
+        if (!checkVideoCodecCompatibility(runtimeConfig.getLiveFfmpegPath(), videoFile, urlType)) {
+            log.warn("[S-4] 视频编码与目标协议不兼容，降级为协议模拟: file={}, urlType={}", videoFile, urlType);
+            diagnosticRecorder.record(DiagnosticCode.SIMULATOR_FFMPEG_WHIP_NOT_SUPPORTED, "live_start_push",
+                    "视频编码与目标协议不兼容: file=" + videoFile + ", urlType=" + urlType
+                    + "。建议使用 H.264 + AAC 编码的 MP4 文件（兼容所有协议）。");
+            return false;
+        }
+
         // 若该 videoId 已有进程，先停止
         stopPush(videoId);
 
-        List<String> cmd = (urlType == URL_TYPE_RTMP)
-                ? buildRtmpCommand(runtimeConfig.getLiveFfmpegPath(), videoFile, url)
-                : buildWhipCommand(runtimeConfig.getLiveFfmpegPath(), videoFile, url);
-        String proto = (urlType == URL_TYPE_RTMP) ? "RTMP" : "WHIP";
+        List<String> cmd;
+        String proto;
+        if (urlType == URL_TYPE_RTMP) {
+            cmd = buildRtmpCommand(runtimeConfig.getLiveFfmpegPath(), videoFile, url);
+            proto = "RTMP";
+        } else {
+            cmd = buildWhipCommand(runtimeConfig.getLiveFfmpegPath(), videoFile, url);
+            proto = "WHIP";
+        }
         log.info("启动 {} 推流: videoId={}, url={}, videoFile={}", proto, videoId, url, videoFile);
         log.debug("ffmpeg 命令: {}", String.join(" ", cmd));
 
@@ -302,6 +320,74 @@ public class FfmpegWhipPusher {
         cmd.add("flv");
         cmd.add(url);
         return cmd;
+    }
+
+    /**
+     * 检查视频文件的编码与目标推流协议是否兼容（-c copy 模式不转码）。
+     * <p>RTMP (FLV): 视频 H.264，音频 AAC/MP3</p>
+     * <p>WebRTC (WHIP): 视频 H.264/VP8，音频 Opus（但 buildWhipCommand 使用转码，无需检查）</p>
+     * @return true=兼容或无法检测（放行）；false=明确不兼容
+     */
+    private boolean checkVideoCodecCompatibility(String ffmpegPath, String videoFile, int urlType) {
+        // WHIP 使用 buildWhipCommand 转码（libx264 + libopus），不需要检查源文件编码
+        if (urlType == URL_TYPE_WEBRTC) {
+            return true;
+        }
+
+        String videoCodec = getVideoCodec(ffmpegPath, videoFile);
+        if (videoCodec == null) {
+            // ffprobe 失败时不阻止推流（避免因 ffprobe 问题导致完全无法推流）
+            log.warn("无法检测视频编码，跳过兼容性检查: file={}", videoFile);
+            return true;
+        }
+
+        log.info("视频编码检测: file={}, codec={}", videoFile, videoCodec);
+
+        if (urlType == URL_TYPE_RTMP) {
+            // RTMP (FLV) 仅支持 H.264 视频
+            if (!"h264".equals(videoCodec)) {
+                log.warn("RTMP 推流要求 H.264 编码，当前视频编码为 {}，不兼容", videoCodec);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * 使用 ffprobe 检测视频文件的视频编码。
+     * @return 编码名称（如 "h264"、"hevc"），检测失败返回 null
+     */
+    private String getVideoCodec(String ffmpegPath, String videoFile) {
+        // ffprobe 通常与 ffmpeg 在同一目录
+        Path ffprobePath = Path.of(ffmpegPath).resolveSibling("ffprobe");
+        String ffprobe = ffprobePath.toAbsolutePath().toString();
+        if (!Files.exists(ffprobePath)) {
+            // 尝试直接使用 ffprobe（依赖 PATH）
+            ffprobe = "ffprobe";
+        }
+
+        try {
+            ProcessBuilder pb = new ProcessBuilder(ffprobe,
+                    "-v", "error",
+                    "-select_streams", "v:0",
+                    "-show_entries", "stream=codec_name",
+                    "-of", "csv=p=0",
+                    videoFile);
+            pb.redirectErrorStream(true);
+            Process process = pb.start();
+
+            String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+            boolean finished = process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+            if (!finished) {
+                process.destroyForcibly();
+                log.warn("ffprobe 执行超时: file={}", videoFile);
+                return null;
+            }
+            return output.isEmpty() ? null : output.toLowerCase();
+        } catch (Exception e) {
+            log.warn("ffprobe 检测视频编码失败: file={}, error={}", videoFile, e.getMessage());
+            return null;
+        }
     }
 
     /**

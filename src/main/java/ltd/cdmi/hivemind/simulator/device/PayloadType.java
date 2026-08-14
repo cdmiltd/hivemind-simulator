@@ -28,6 +28,10 @@ public enum PayloadType {
     M3TD_CAMERA (81,  0, 0, DeviceType.M3TD),
     M4D_CAMERA  (98,  0, 0, DeviceType.M4D),
     M4TD_CAMERA (99,  0, 0, DeviceType.M4TD),
+    MAVIC_3E_CAMERA (66, 0, 0, DeviceType.MAVIC_3E),
+    MAVIC_3T_CAMERA (67, 0, 0, DeviceType.MAVIC_3T),
+    M4E_CAMERA  (88, 0, 0, DeviceType.M4E),
+    M4T_CAMERA  (89, 0, 0, DeviceType.M4T),
 
     // 通用云台负载（可挂载于 M300/M350 等多款飞行器）
     Z30  (20, 0, 0, null),
@@ -65,6 +69,8 @@ public enum PayloadType {
     /** 获取飞行器默认主相机 */
     public static PayloadType defaultCameraFor(DeviceType aircraft) {
         if (aircraft == null || !aircraft.isAircraft()) return null;
+        // M400 搭载 H30/H30T 通用云台负载（DJI 产品支持文档），默认 H30（82-0-0，非热成像）
+        if (aircraft == DeviceType.M400) return PayloadType.H30;
         for (PayloadType p : values()) {
             if (p.compatibleAircraft == aircraft) {
                 return p;

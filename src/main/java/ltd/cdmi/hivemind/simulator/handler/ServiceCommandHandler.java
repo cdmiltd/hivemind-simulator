@@ -26,17 +26,14 @@ import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticCode;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
 import ltd.cdmi.hivemind.simulator.diagnostic.ProtocolValidator;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
-import ltd.cdmi.hivemind.simulator.mqtt.TopicConstants;
+import ltd.cdmi.hivemind.simulator.mqtt.DockTopicSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.UUID;
 import java.util.function.BiFunction;
 
 /**
@@ -68,31 +65,12 @@ public class ServiceCommandHandler {
             "upload_flighttask_media_prioritize"
     );
 
-    /** DRC 远程控制命令 */
-    private static final Set<String> DRC_METHODS = Set.of(
-            "drc_mode_enter", "drc_mode_exit"
-    );
-
     /** 指令飞行命令（drc.html，委托 FlightCommandSimulator） */
     private static final Set<String> FLY_METHODS = Set.of(
             "fly_to_point", "fly_to_point_stop", "fly_to_point_update",
             "takeoff_to_point",
             "flight_authority_grab", "payload_authority_grab",
             "poi_mode_enter", "poi_mode_exit", "poi_circle_speed_set"
-    );
-
-    /** 负载控制命令（drc.html，同步指令，本类直接处理） */
-    private static final Set<String> PAYLOAD_METHODS = Set.of(
-            "camera_frame_zoom", "camera_mode_switch",
-            "camera_photo_take", "camera_photo_stop",
-            "camera_recording_start", "camera_recording_stop",
-            "camera_screen_drag", "camera_aim",
-            "camera_focal_length_set", "gimbal_reset",
-            "camera_look_at", "camera_screen_split",
-            "photo_storage_set", "video_storage_set",
-            "camera_exposure_mode_set", "camera_exposure_set", "camera_focus_mode_set",
-            "camera_focus_value_set", "camera_point_focus_action",
-            "ir_metering_mode_set", "ir_metering_point_set", "ir_metering_area_set"
     );
 
     /**
@@ -106,9 +84,18 @@ public class ServiceCommandHandler {
     private final ObjectMapper objectMapper;
     private final FlightCommandSimulator flightCommandSimulator;
     private final RemoteDebugSimulator remoteDebugSimulator;
+    private final FlightAreaSimulator flightAreaSimulator;
+    private final UnlockLicenseSimulator unlockLicenseSimulator;
+    private final PsdkSimulator psdkSimulator;
+    private final EsdkSimulator esdkSimulator;
+    private final RemoteLogSimulator remoteLogSimulator;
+    private final OtaSimulator otaSimulator;
     private final DiagnosticLogRecorder diagnosticRecorder;
     private final CoverageRecorder coverageRecorder;
     private final RuntimeConfig runtimeConfig;
+    private final DockTopicSchema dockTopicSchema;
+    private final PayloadControlHandler payloadControlHandler;
+    private final AuthFlowHandler authFlowHandler;
 
     /** 动态注册的命令处理器：method → (data, tid, bid) → output */
     private BiFunction<String, JsonNode, Map<String, Object>> waylineHandler;
@@ -119,25 +106,43 @@ public class ServiceCommandHandler {
                                  DeviceState state, ObjectMapper objectMapper,
                                  FlightCommandSimulator flightCommandSimulator,
                                  RemoteDebugSimulator remoteDebugSimulator,
+                                 FlightAreaSimulator flightAreaSimulator,
+                                 UnlockLicenseSimulator unlockLicenseSimulator,
+                                 PsdkSimulator psdkSimulator,
+                                 EsdkSimulator esdkSimulator,
+                                 RemoteLogSimulator remoteLogSimulator,
+                                 OtaSimulator otaSimulator,
                                  DiagnosticLogRecorder diagnosticRecorder,
                                  CoverageRecorder coverageRecorder,
-                                 RuntimeConfig runtimeConfig) {
+                                 RuntimeConfig runtimeConfig,
+                                 DockTopicSchema dockTopicSchema,
+                                 PayloadControlHandler payloadControlHandler,
+                                 AuthFlowHandler authFlowHandler) {
         this.props = props;
         this.mqtt = mqtt;
         this.state = state;
         this.objectMapper = objectMapper;
         this.flightCommandSimulator = flightCommandSimulator;
         this.remoteDebugSimulator = remoteDebugSimulator;
+        this.flightAreaSimulator = flightAreaSimulator;
+        this.unlockLicenseSimulator = unlockLicenseSimulator;
+        this.psdkSimulator = psdkSimulator;
+        this.esdkSimulator = esdkSimulator;
+        this.remoteLogSimulator = remoteLogSimulator;
+        this.otaSimulator = otaSimulator;
         this.diagnosticRecorder = diagnosticRecorder;
         this.coverageRecorder = coverageRecorder;
         this.runtimeConfig = runtimeConfig;
+        this.dockTopicSchema = dockTopicSchema;
+        this.payloadControlHandler = payloadControlHandler;
+        this.authFlowHandler = authFlowHandler;
     }
 
     @PostConstruct
     public void init() {
-        String dockSn = runtimeConfig.getDockSn();
-        mqtt.addListener(TopicConstants.topic(TopicConstants.SERVICES, dockSn), this::handleService);
-        log.info("ServiceCommandHandler 已注册监听: {}", TopicConstants.topic(TopicConstants.SERVICES, dockSn));
+        String gatewaySn = runtimeConfig.getGatewaySn();
+        mqtt.addListener(dockTopicSchema.topic(dockTopicSchema.services(), gatewaySn), this::handleService);
+        log.info("ServiceCommandHandler 已注册监听: {}", dockTopicSchema.topic(dockTopicSchema.services(), gatewaySn));
     }
 
     /**
@@ -231,9 +236,9 @@ public class ServiceCommandHandler {
             }
             return Map.of("result", 0);
         }
-        // DRC 远程控制命令
-        if (DRC_METHODS.contains(method)) {
-            return handleDrcCommand(method);
+        // DRC 模式切换 + 云控授权（委托 AuthFlowHandler）
+        if (authFlowHandler.handles(method)) {
+            return authFlowHandler.handle(method, data, bid);
         }
 
         // 指令飞行命令（drc.html）
@@ -241,9 +246,9 @@ public class ServiceCommandHandler {
             return flightCommandSimulator.handle(method, data, bid);
         }
 
-        // 负载控制命令（drc.html）
-        if (PAYLOAD_METHODS.contains(method)) {
-            return handlePayloadCommand(method, data);
+        // 负载控制命令（drc.html，委托 PayloadControlHandler）
+        if (payloadControlHandler.handles(method)) {
+            return payloadControlHandler.handle(method, data);
         }
 
         // 远程调试命令（cmd.html）
@@ -251,223 +256,46 @@ public class ServiceCommandHandler {
             return remoteDebugSimulator.handle(method, data, bid);
         }
 
+        // 自定义飞行区更新指令（wayline.html，Dock1/Dock2/Dock3）：回 result=0 并自动联动 flight_areas_get
+        if ("flight_areas_update".equals(method)) {
+            return flightAreaSimulator.handleServiceUpdate();
+        }
+
+        // 远程解禁指令（wayline.html，Dock1/Dock2/Dock3）：同步 Service，回 result=0
+        if (UnlockLicenseSimulator.isUnlockLicenseMethod(method)) {
+            if ("unlock_license_switch".equals(method)) {
+                return unlockLicenseSimulator.handleSwitch(data);
+            }
+            if ("unlock_license_list".equals(method)) {
+                return unlockLicenseSimulator.handleList(data);
+            }
+            return unlockLicenseSimulator.handleUpdate(data);
+        }
+
+        // PSDK 喊话器指令（wayline.html，Dock3）：同步 Service，回 result=0
+        if (PsdkSimulator.isPsdkServiceMethod(method)) {
+            return psdkSimulator.handleService(method, data);
+        }
+
+        // ESDK 互联互通指令（Dock1/Dock2/Dock3）：同步 Service，回 result=0
+        if (EsdkSimulator.isEsdkServiceMethod(method)) {
+            return esdkSimulator.handleService(method, data);
+        }
+
+        // 远程日志指令（Dock1/Dock2/Dock3）：同步 Service，回 result=0，fileupload_start 异步模拟进度
+        if (RemoteLogSimulator.isRemoteLogServiceMethod(method)) {
+            return remoteLogSimulator.handleService(method, data);
+        }
+
+        // 固件升级指令（Dock1/Dock2/Dock3）：同步 Service，回 {result:0, output:{status:"in_progress"}}，异步模拟进度
+        if (OtaSimulator.isOtaServiceMethod(method)) {
+            return otaSimulator.handleService(method, data);
+        }
+
         // 其他未实现的命令：统一占位 result=0
         log.warn("[S-2] 未覆盖指令占位应答: method={}", method);
         diagnosticRecorder.record(DiagnosticCode.SIMULATOR_METHOD_NOT_IMPLEMENTED, method, "未覆盖指令占位应答");
         return Map.of("result", 0);
-    }
-
-    /**
-     * 处理 DRC 远程控制命令。
-     * <p>drc_mode_enter：进入 DRC 模式，设 drcState=2(已连接)。</p>
-     * <p>drc_mode_exit：退出 DRC 模式，设 drcState=0(空闲)。</p>
-     */
-    private Map<String, Object> handleDrcCommand(String method) {
-        switch (method) {
-            case "drc_mode_enter" -> {
-                state.setDrcState(2);
-                log.info("已进入 DRC 模式");
-                publishDrcState(2);
-            }
-            case "drc_mode_exit" -> {
-                state.setDrcState(0);
-                log.info("已退出 DRC 模式");
-                publishDrcState(0);
-            }
-        }
-        return Map.of("result", 0);
-    }
-
-    /**
-     * 处理负载控制命令（drc.html）。
-     * <p>DJI 文档：负载控制指令的 services_reply 均仅有 result，无 output（camera_photo_take 全景模式除外）。
-     * camera_mode_switch 额外更新 DeviceState.cameraMode。</p>
-     */
-    private Map<String, Object> handlePayloadCommand(String method, JsonNode data) {
-        // P-10：枚举值校验，非法枚举值返回 result=1（按设计文档"命令处理失败返回 result=1"约定）
-        DiagnosticCode enumError = ProtocolValidator.validatePayloadEnum(method, data);
-        if (enumError != null) {
-            log.error("{} 负载控制指令枚举值校验失败: method={}", ProtocolValidator.logPrefix(enumError), method);
-            diagnosticRecorder.record(enumError, method, "枚举值校验失败");
-            return Map.of("result", 1);
-        }
-
-        switch (method) {
-            case "camera_frame_zoom" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                String cameraType = data.path("camera_type").asText();
-                boolean locked = data.path("locked").asBoolean();
-                double x = data.path("x").asDouble();
-                double y = data.path("y").asDouble();
-                double width = data.path("width").asDouble();
-                double height = data.path("height").asDouble();
-                log.info("camera_frame_zoom 指令: payload_index={}, camera_type={}, locked={}, x={}, y={}, width={}, height={}",
-                        payloadIndex, cameraType, locked, x, y, width, height);
-            }
-            case "camera_mode_switch" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                int cameraMode = data.path("camera_mode").asInt();
-                state.setPayloadIndex(payloadIndex);
-                state.setCameraMode(cameraMode);
-                log.info("camera_mode_switch 指令: payload_index={}, camera_mode={}", payloadIndex, cameraMode);
-            }
-            case "camera_photo_take" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                log.info("camera_photo_take 指令: payload_index={}, camera_mode={}", payloadIndex, state.getCameraMode());
-                // DJI 协议枚举 camera_mode: 0=拍照, 1=录像, 2=智能低光, 3=全景拍照
-                // 全景拍照为持续性拍照行为，services_reply 需返回 output.status=in_progress，
-                // 表示后续会有 camera_photo_take_progress 事件上报
-                if (state.getCameraMode() == 3) {
-                    log.info("全景拍照模式，services_reply 包含 output.status=in_progress");
-                    return Map.of("result", 0, "output", Map.of("status", "in_progress"));
-                }
-            }
-            case "camera_photo_stop" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                log.info("camera_photo_stop 指令: payload_index={}", payloadIndex);
-            }
-            case "camera_recording_start" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                log.info("camera_recording_start 指令: payload_index={}", payloadIndex);
-            }
-            case "camera_recording_stop" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                log.info("camera_recording_stop 指令: payload_index={}", payloadIndex);
-            }
-            case "camera_screen_drag" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                boolean locked = data.path("locked").asBoolean();
-                double pitchSpeed = data.path("pitch_speed").asDouble();
-                double yawSpeed = data.path("yaw_speed").asDouble();
-                log.info("camera_screen_drag 指令: payload_index={}, locked={}, pitch_speed={}, yaw_speed={}",
-                        payloadIndex, locked, pitchSpeed, yawSpeed);
-            }
-            case "camera_aim" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                String cameraType = data.path("camera_type").asText();
-                boolean locked = data.path("locked").asBoolean();
-                double x = data.path("x").asDouble();
-                double y = data.path("y").asDouble();
-                log.info("camera_aim 指令: payload_index={}, camera_type={}, locked={}, x={}, y={}",
-                        payloadIndex, cameraType, locked, x, y);
-            }
-            case "camera_focal_length_set" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                String cameraType = data.path("camera_type").asText();
-                double zoomFactor = data.path("zoom_factor").asDouble();
-                log.info("camera_focal_length_set 指令: payload_index={}, camera_type={}, zoom_factor={}",
-                        payloadIndex, cameraType, zoomFactor);
-            }
-            case "gimbal_reset" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                int resetMode = data.path("reset_mode").asInt();
-                log.info("gimbal_reset 指令: payload_index={}, reset_mode={}", payloadIndex, resetMode);
-            }
-            case "camera_look_at" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                boolean locked = data.path("locked").asBoolean();
-                double latitude = data.path("latitude").asDouble();
-                double longitude = data.path("longitude").asDouble();
-                double height = data.path("height").asDouble();
-                log.info("camera_look_at 指令: payload_index={}, locked={}, target=({},{},{})",
-                        payloadIndex, locked, latitude, longitude, height);
-            }
-            case "camera_screen_split" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                boolean enable = data.path("enable").asBoolean();
-                log.info("camera_screen_split 指令: payload_index={}, enable={}", payloadIndex, enable);
-            }
-            case "photo_storage_set" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                List<String> settings = new ArrayList<>();
-                data.path("photo_storage_settings").forEach(n -> settings.add(n.asText()));
-                log.info("photo_storage_set 指令: payload_index={}, settings={}", payloadIndex, settings);
-            }
-            case "video_storage_set" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                List<String> settings = new ArrayList<>();
-                data.path("video_storage_settings").forEach(n -> settings.add(n.asText()));
-                log.info("video_storage_set 指令: payload_index={}, settings={}", payloadIndex, settings);
-            }
-            case "camera_exposure_mode_set" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                String cameraType = data.path("camera_type").asText();
-                int exposureMode = data.path("exposure_mode").asInt();
-                log.info("camera_exposure_mode_set 指令: payload_index={}, camera_type={}, exposure_mode={}",
-                        payloadIndex, cameraType, exposureMode);
-            }
-            case "camera_exposure_set" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                String cameraType = data.path("camera_type").asText();
-                String exposureValue = data.path("exposure_value").asText();
-                log.info("camera_exposure_set 指令: payload_index={}, camera_type={}, exposure_value={}",
-                        payloadIndex, cameraType, exposureValue);
-            }
-            case "camera_focus_mode_set" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                String cameraType = data.path("camera_type").asText();
-                int focusMode = data.path("focus_mode").asInt();
-                log.info("camera_focus_mode_set 指令: payload_index={}, camera_type={}, focus_mode={}",
-                        payloadIndex, cameraType, focusMode);
-            }
-            case "camera_focus_value_set" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                String cameraType = data.path("camera_type").asText();
-                int focusValue = data.path("focus_value").asInt();
-                log.info("camera_focus_value_set 指令: payload_index={}, camera_type={}, focus_value={}",
-                        payloadIndex, cameraType, focusValue);
-            }
-            case "camera_point_focus_action" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                String cameraType = data.path("camera_type").asText();
-                double x = data.path("x").asDouble();
-                double y = data.path("y").asDouble();
-                log.info("camera_point_focus_action 指令: payload_index={}, camera_type={}, x={}, y={}",
-                        payloadIndex, cameraType, x, y);
-            }
-            case "ir_metering_mode_set" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                int mode = data.path("mode").asInt();
-                log.info("ir_metering_mode_set 指令: payload_index={}, mode={}", payloadIndex, mode);
-            }
-            case "ir_metering_point_set" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                double x = data.path("x").asDouble();
-                double y = data.path("y").asDouble();
-                log.info("ir_metering_point_set 指令: payload_index={}, x={}, y={}", payloadIndex, x, y);
-            }
-            case "ir_metering_area_set" -> {
-                String payloadIndex = data.path("payload_index").asText();
-                double x = data.path("x").asDouble();
-                double y = data.path("y").asDouble();
-                double width = data.path("width").asDouble();
-                double height = data.path("height").asDouble();
-                log.info("ir_metering_area_set 指令: payload_index={}, x={}, y={}, width={}, height={}",
-                        payloadIndex, x, y, width, height);
-            }
-        }
-        return Map.of("result", 0);
-    }
-
-    /**
-     * 通过 state topic 上报 DRC 状态变更。
-     * <p>DJI Cloud API 规范：drc_state 通过 thing/product/{gateway_sn}/state 上报。</p>
-     * <p>格式：{@code {tid, bid, timestamp, gateway, data:{"drc_state":N}}}</p>
-     */
-    private void publishDrcState(int drcState) {
-        Map<String, Object> data = new LinkedHashMap<>();
-        data.put("drc_state", drcState);
-
-        Map<String, Object> stateMsg = new LinkedHashMap<>();
-        stateMsg.put("tid", UUID.randomUUID().toString());
-        stateMsg.put("bid", UUID.randomUUID().toString());
-        stateMsg.put("timestamp", System.currentTimeMillis());
-        stateMsg.put("gateway", runtimeConfig.getDockSn());
-        stateMsg.put("data", data);
-
-        String stateTopic = TopicConstants.topic(TopicConstants.STATE, runtimeConfig.getDockSn());
-        mqtt.publishJson(stateTopic, stateMsg);
-        log.info("已上报 DRC 状态: drc_state={} via state topic", drcState);
     }
 
     /**
@@ -485,11 +313,11 @@ public class ServiceCommandHandler {
         reply.put("tid", tid);
         reply.put("bid", bid);
         reply.put("timestamp", System.currentTimeMillis());
-        reply.put("gateway", runtimeConfig.getDockSn());
+        reply.put("gateway", runtimeConfig.getGatewaySn());
         reply.put("method", method);
         reply.put("data", data);
 
-        String replyTopic = TopicConstants.topic(TopicConstants.SERVICES_REPLY, runtimeConfig.getDockSn());
+        String replyTopic = dockTopicSchema.topic(dockTopicSchema.servicesReply(), runtimeConfig.getGatewaySn());
         mqtt.publishJson(replyTopic, reply);
         log.info("已回复 services_reply: method={}, tid={}, result={}", method, tid, data.get("result"));
     }

@@ -45,6 +45,7 @@ public class MonitorService {
     private final ObjectMapper objectMapper;
     private final SimulatorProperties props;
     private final MqttProperties mqttProps;
+    private final DockTopicSchema dockTopicSchema;
 
     private volatile MonitorMqttClient mqttClient;
 
@@ -60,10 +61,11 @@ public class MonitorService {
     /** 当前选中的设备 SN */
     private volatile String selectedDeviceSn;
 
-    public MonitorService(ObjectMapper objectMapper, SimulatorProperties props, MqttProperties mqttProps) {
+    public MonitorService(ObjectMapper objectMapper, SimulatorProperties props, MqttProperties mqttProps, DockTopicSchema dockTopicSchema) {
         this.objectMapper = objectMapper;
         this.props = props;
         this.mqttProps = mqttProps;
+        this.dockTopicSchema = dockTopicSchema;
     }
 
     // ==================== 连接管理 ====================
@@ -333,7 +335,7 @@ public class MonitorService {
         payload.put("timestamp", System.currentTimeMillis());
         payload.put("data", data != null ? data : Collections.emptyMap());
 
-        String topic = TopicConstants.topic(TopicConstants.SERVICES, sn);
+        String topic = dockTopicSchema.topic(dockTopicSchema.services(), sn);
         try {
             String json = objectMapper.writeValueAsString(payload);
             mqttClient.publish(topic, json);
@@ -359,7 +361,7 @@ public class MonitorService {
         payload.put("timestamp", System.currentTimeMillis());
         payload.put("data", data != null ? data : Collections.emptyMap());
 
-        String topic = TopicConstants.topic(TopicConstants.PROPERTY_SET, sn);
+        String topic = dockTopicSchema.topic(dockTopicSchema.propertySet(), sn);
         try {
             String json = objectMapper.writeValueAsString(payload);
             mqttClient.publish(topic, json);

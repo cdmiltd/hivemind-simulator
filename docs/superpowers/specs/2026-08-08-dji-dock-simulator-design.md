@@ -67,6 +67,12 @@ hivemind 是无人机自主作业平台，已通过 `adapter-drone` 模块按 DJ
 | `MediaUploadSimulator` | 媒体上传：storage_config_get 请求 → STS 凭证解析 → S3 文件上传 → file_upload_callback 事件上报 |
 | `MediaUploader` | S3 兼容文件上传：使用 STS 凭证上传文件到对象存储（支持 ali/aws/minio/obs，从 endpoint 提取签名 region） |
 | `HmsSimulator` | HMS 告警上报（基于 hms.json 错误码映射） |
+| `AirSenseSimulator` | AirSense 告警上报（method=airsense_warning，data 为数组，need_reply=1） |
+| `FlightAreaSimulator` | 自定义飞行区模拟（[Dock1/Dock2/Dock3 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock1/wayline.html)）：flight_areas_drone_location/sync_progress 事件上报 + flight_areas_get 请求（等待 reply）+ flight_areas_update service 应答（自动联动 get，记录 M-2 诊断日志） |
+| `UnlockLicenseSimulator` | 远程解禁模拟（[Dock1/Dock2/Dock3 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock1/wayline.html)）：unlock_license_switch（启用/禁用证书，维护状态）+ unlock_license_update（更新证书，file 可缺省）+ unlock_license_list（返回 7 种类型证书列表，switch 状态反映到 list）同步 Service 应答 |
+| `PsdkSimulator` | PSDK 喊话器与负载事件模拟（[Dock1 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html) / [Dock2 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/wayline.html) / [Dock3 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) / [psdk-transmit-custom-data.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/psdk-transmit-custom-data.html)）：9 个同步 Service 应答（speaker_play_volume_set/mode_set/stop、speaker_replay、speaker_tts_play_start、speaker_audio_play_start、psdk_input_box_text_set、psdk_widget_value_set、custom_data_transmission_to_psdk，仅 result=0）+ 5 个 Event 上报（speaker_tts_play_start_progress/speaker_audio_play_start_progress/psdk_floating_window_text/psdk_ui_resource_upload_result/custom_data_transmission_from_psdk，need_reply=0 单向通知）。psdk_input_box_text_set 收到后自动触发 psdk_floating_window_text 事件联动。PSDK UI 资源完整上传流程（storage_config_get module=1 → 上传内置占位文件 → psdk_ui_resource_upload_result 事件）。内置默认 TTS 文本与占位 PCM 字节并预计算 MD5，REST API 可覆盖。status 枚举遵循约束 `in_progress`/`ok`（DJI Example 显示 `success` 与约束矛盾，记录 M-2 诊断日志待真机验证）。platform 下发 speaker_tts_play_start 后页面自动朗读 tts.text，speaker_audio_play_start 后尝试播放 file.url。speaker_tts_play_start_progress 的 step_key 枚举有机型差异：Dock1/Dock2 为 3 步（change_work_mode/play/upload），Dock3 为 5 步（+download/encoding），前端合并显示 5 选项。custom_data_transmission_from_psdk 的 need_reply 值 DJI 文档未标注，遵循现有 PSDK 事件设置使用 0（记录 M-2 诊断日志） |
+| `EsdkSimulator` | ESDK 互联互通事件模拟（[Dock1/Dock2/Dock3 esdk-transmit-custom-data.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/esdk-transmit-custom-data.html)）：1 个同步 Service 应答（custom_data_transmission_to_esdk，仅 result=0）+ 1 个 Event 上报（custom_data_transmission_from_esdk，need_reply=0 单向通知）。Data 结构 `{value: text}`（length<256）。need_reply 值 DJI 文档未标注，遵循现有事件设置使用 0（记录 M-2 诊断日志） |
+| `RemoteLogSimulator` | 远程日志模拟（[Dock1/Dock2/Dock3 log-upload.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/log-upload.html)）：2 个同步 Service 应答（fileupload_start/fileupload_update，仅 result=0）+ 1 个 Event 上报（fileupload_progress，need_reply=0 单向通知）。fileupload_start 收到后异步模拟上传进度（in_progress 50%→ok 100%），与 RemoteDebugSimulator 异步 Job 模式一致。fileupload_update status=cancel 取消上传。progress 字段使用 `progress`（DJI Column 表写 `prgress` 疑似拼写错误，记录 M-2 诊断日志） |
 | `RemoteDebugSimulator` | 远程调试模拟（[cmd.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/cmd.html)）：同步 Cmd 指令（debug_mode/light/battery/alarm 等仅回 result=0）+ 异步 Job 指令（cover/drone/charge/putter/reboot/format/esim/rtk 进度事件 in_progress→ok + percent + 状态同步），区分 Dock1/Dock2/Dock3 指令集差异 |
 | `FlightCommandSimulator` | 指令飞行模拟（[drc.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html)）：fly_to_point/takeoff_to_point 指令应答 + 专用进度事件（fly_to_point_progress/takeoff_to_point_progress），flight_authority_grab/payload_authority_grab 同步应答 |
 | `DrcCommandHandler` | DRC 远程控制指令路由（[remote-control.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/remote-control.html)）：订阅 drc/down，按 method 路由（joystick/osd/voice 等），统一回 drc/up |
@@ -104,14 +110,16 @@ hivemind 是无人机自主作业平台，已通过 `adapter-drone` 模块按 DJ
 7. 设备绑定信息获取
    ├─ Topic: thing/product/{gateway_sn}/requests        Method: airport_bind_status
    └─ Topic: thing/product/{gateway_sn}/requests_reply  Method: airport_bind_status
+      result≠0 表示错误，停止注册并透传 result
 8. 请求设备绑定码对应的组织信息
    ├─ Topic: thing/product/{gateway_sn}/requests        Method: airport_organization_get
    └─ Topic: thing/product/{gateway_sn}/requests_reply  Method: airport_organization_get
-      result=210229 表示绑定码错误
+      result≠0 表示错误（210229 绑定码错误、210234 组织不存在等），停止注册并透传 result
 9. 通过设备绑定码将设备绑定到对应组织
    ├─ Topic: thing/product/{gateway_sn}/requests        Method: airport_organization_bind
    └─ Topic: thing/product/{gateway_sn}/requests_reply  Method: airport_organization_bind
-      result=210229 表示绑定码错误
+      result≠0 表示错误（210229 绑定码错误等），停止注册并透传 result
+      result=0 但 output.err_infos 非空表示设备级绑定失败（如 210231 设备已绑定其他组织），透传第一个 err_code
 ```
 
 **注意**：update_topo 不属于机场上云注册流程，注册成功后才执行上线（见 §4.2）。
@@ -258,9 +266,9 @@ hivemind 是无人机自主作业平台，已通过 `adapter-drone` 模块按 DJ
 2. `DockOnlineService` 发 `config` 请求获取 app_id/app_key/app_license/ntp
    - 超时重试 3 次（间隔 3 秒），全失败停止注册
    - 收到回复后比对 app_license 与本地配置，不一致停止注册返回 -6。本地未配置 app_license（留空）时跳过校验，不模拟 License 认证
-3. 发 `airport_bind_status` 查询绑定状态
-4. 发 `airport_organization_get` 查询组织信息（result=210229 表示绑定码错误，停止注册）
-5. 发 `airport_organization_bind` 绑定到组织（result=210229 表示绑定码错误，停止注册）
+3. 发 `airport_bind_status` 查询绑定状态（result≠0 表示错误，停止注册并透传 result）
+4. 发 `airport_organization_get` 查询组织信息（result≠0 表示错误，停止注册并透传 result）
+5. 发 `airport_organization_bind` 绑定到组织（result≠0 停止注册并透传 result；result=0 但 output.err_infos 非空表示设备级绑定失败，透传第一个 err_code）
 
 ### 5.2 上线流程
 1. 注册成功后 → `DockOnlineService.online()`
@@ -274,9 +282,42 @@ hivemind 是无人机自主作业平台，已通过 `adapter-drone` 模块按 DJ
 ### 5.3 航线任务流程
 1. 云端下发 `flighttask_prepare`（含 flight_id, file.url）→ 回复 result=0
 2. 云端下发 `flighttask_execute` → 回复 result=0 → 启动异步进度模拟
-3. 异步线程按时间推进上报 `flighttask_progress`（status=in_progress, current_step 7→24→25→27→28→35, percent 0→100）
+3. 异步线程按时间推进上报 `flighttask_progress`（status=in_progress, current_step 按型号版本化见下表, percent 5→20→60→80→90→100）
 4. 进度到 100%（status=ok）→ 发 `return_home_info` → 触发媒体上传
 5. 媒体上传：调用 `MediaUploadSimulator.simulateMediaUpload`（详见 [5.7 媒体管理流程](#57-媒体管理流程)）
+
+#### 5.3.1 current_step 版本对比（Dock1 / Dock2 / Dock3）
+
+> 核实依据：[Dock1 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html) | [Dock2 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/wayline.html) | [Dock3 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) — flighttask_progress progress.current_step 枚举
+
+模拟器选择 6 个关键步骤（开机→起飞→返航检查→降落→退出工作模式→通知结果），不含"航线执行中"以保证三版本 stepIndex 语义一致（Dock2 文档跳过了该步骤值）。
+
+| stepIndex | 语义 | Dock1 step | Dock2 step | Dock3 step |
+|---|---|---|---|---|
+| 0 | 开机检查+开盖 | 7 | 7 | 7 |
+| 1 | 触发执行航线（起飞） | 22 | 24 | 24 |
+| 2 | 进入返航检查 | 24 | 26 | 26 |
+| 3 | 飞行器降落机场 | 25 | 27 | 27 |
+| 4 | 机场退出工作模式 | 27 | 29 | 29 |
+| 5 | 通知任务结果 | 33 | 35 | 35 |
+
+**偏移原因**：Dock2/3 比 Dock1 多 step 8（图传远程对频）和 step 22（起飞机场检查降落机场准备状态），且 Dock2 跳过了 step 25（航线执行中，Dock3 有此值），导致 Dock2/3 的 step 值整体偏移 +2。
+
+**实现**：`STEP_SEQUENCE_DOCK1 = {7, 22, 24, 25, 27, 33}`，`STEP_SEQUENCE_DOCK2_3 = {7, 24, 26, 27, 29, 35}`，`stepSequence()` 按型号返回。`updateDroneStateByStepIndex(stepIndex)` 按 stepIndex 更新无人机状态（三版本通用，避免 step 值差异导致 case 不匹配）。
+
+#### 5.3.2 break_reason 版本对比（Dock1 / Dock2 / Dock3）
+
+> 核实依据：同上 wayline.html — flighttask_progress ext.break_point.break_reason 枚举
+
+三版本 break_reason 枚举仅 528/529 两个值存在型号差异，其余值（含 1565=航线避障紧急刹停）三版本一致。
+
+| break_reason | 语义 | Dock1 | Dock2 | Dock3 |
+|---|---|---|---|---|
+| 528 | 接近用户自定义飞行区边界 | ✓ | ✗ | ✗ |
+| 529 | 有障碍物或者禁飞区域，导致航线无法到达 | ✗ | ✓ | ✗ |
+| 1565 | 航线避障紧急刹停 | ✓ | ✓ | ✓ |
+
+**实现**：`BREAK_REASON_BASE`（三版本共有集合，不含 528/529）；`isBreakReasonValid()` 按型号校验：528 仅 Dock1，529 仅 Dock2，其余在 BASE 中即合法。`defaultBreakReason()`：Dock1=528，Dock2=529，Dock3=517（飞行器触发避障）。
 
 ### 5.4 直播流程
 1. 云端下发 `live_start_push`（含 url, video_id, url_type, video_quality）→ 回 result=0 → 记录推流状态（幂等更新）
@@ -360,13 +401,86 @@ hivemind 是无人机自主作业平台，已通过 `adapter-drone` 模块按 DJ
 - 模式与 DockOnlineService.sendRequest 的 requests_reply 等待一致
 - 超时不阻塞流程（对齐"模拟器不因云端未回复而卡死"的健壮性要求）
 
+### 5.8 自定义飞行区流程（Dock1/Dock2/Dock3）
+
+> 核实依据：[Dock1 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock1/wayline.html)、[Dock2 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock2/wayline.html)、[Dock3 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) 自定义飞行区（三版本协议结构一致）
+
+参与方：Cloud Server、DJI Dock
+
+1. **飞行区更新通知**（Service，云端主动下发）
+   ├─ Topic: thing/product/{gateway_sn}/services       Method: flight_areas_update（data=null）
+   └─ Topic: thing/product/{gateway_sn}/services_reply  Method: flight_areas_update
+       data.result=0（收到更新通知）
+
+2. **设备主动获取飞行区文件**（Requests，收到 update 后自动联动）
+   ├─ Topic: thing/product/{gateway_sn}/requests        Method: flight_areas_get（data=null）
+   └─ Topic: thing/product/{gateway_sn}/requests_reply  Method: flight_areas_get
+       解析 output.files 列表：name/url/checksum/size
+       校验文件名格式：geofence_{fileMD5}.json（Dock1/Dock2 规范，fileMD5 为 32 位十六进制 MD5 值）
+       ├─ 校验通过：返回 fileValid=true，不自动上报 sync_progress
+       └─ 校验失败：自动上报 sync_progress(fail, reason=1 "解析云端返回的文件信息失败")，返回 fileValid=false
+          ⚠️ 校验失败后自动上报 sync_progress 为推断行为，记录 M-2 诊断日志
+   ⚠️ update 与 get 的联动关系 DJI 文档未明确，为合理推断（平台通知更新→设备主动拉取），记录 M-2 诊断日志
+
+3. **文件同步进度上报**（Event，need_reply=1）
+   ├─ Topic: thing/product/{gateway_sn}/events          Method: flight_areas_sync_progress
+   │   data: { status（enum_string: fail/switch_fail/synchronized/synchronizing/wait_sync）,
+   │            reason（int: 0=成功, 1-13=失败原因）,
+   │            file: { name, checksum（SHA256） } }
+   └─ Topic: thing/product/{gateway_sn}/events_reply     Method: 同上（tid 匹配，result=0）
+
+4. **飞行器位置告警推送**（Event，need_reply=0，单向通知）
+   └─ Topic: thing/product/{gateway_sn}/events          Method: flight_areas_drone_location
+       data: { drone_locations: [{ area_distance（float）, area_id（string）, is_in_area（bool） }] }
+       注：area_id 在 Dock2 表格明确列出（区域唯一 ID），Dock3 表格遗漏但 Example 包含，已交叉验证
+
+**触发时机**：
+- flight_areas_update：平台主动下发（ServiceCommandHandler 路由到 FlightAreaSimulator）
+- flight_areas_get：收到 update 自动联动 + Web 控制台手动触发（REST API）
+- flight_areas_sync_progress / flight_areas_drone_location：Web 控制台手动触发（REST API）
+
+**requests_reply 等待机制**：
+- FlightAreaSimulator 独立注册 REQUESTS_REPLY 监听器，用 tid 匹配 CompletableFuture
+- 与 WaylineTaskSimulator 的 requests 机制独立（各自按 tid 匹配，互不干扰，MqttClientManager 支持同 topic 多监听器）
+- 超时 10 秒，超时返回 REPLY_TIMEOUT（不阻塞）
+
+### 5.9 远程解禁流程（Dock1/Dock2/Dock3）
+
+> 核实依据：[Dock1 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock1/wayline.html) [Dock2 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/wayline.html) [Dock3 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) 远程解禁
+
+参与方：Cloud Server、DJI Dock
+
+1. **启用/禁用单个解禁证书**（Service，同步）
+   ├─ Topic: thing/product/{gateway_sn}/services       Method: unlock_license_switch
+   │   data: {license_id: int, enable: bool}
+   └─ Topic: thing/product/{gateway_sn}/services_reply  Method: unlock_license_switch
+       data: {result: 0, license_id: int}
+   ├─ 模拟器维护证书状态 licenses（license_id → enabled），可通过 REST API 查询
+   └─ GET /api/unlock-license/list | POST /api/unlock-license/reset
+
+2. **更新解禁证书**（Service，同步）
+   ├─ Topic: thing/product/{gateway_sn}/services       Method: unlock_license_update
+   │   data: {file: {url, fingerprint}}（file 可缺省，按 Flysafe 服务器最新证书更新）
+   └─ Topic: thing/product/{gateway_sn}/services_reply  Method: unlock_license_update
+       data: {result: 0}
+   └─ 模拟器不实际下载文件，仅模拟更新成功
+
+3. **获取解禁证书列表**（Service，同步）
+   ├─ Topic: thing/product/{gateway_sn}/services       Method: unlock_license_list
+   │   data: {device_model_domain: 0|3}（0=飞行器, 3=机场）
+   └─ Topic: thing/product/{gateway_sn}/services_reply  Method: unlock_license_list
+       data: {result: 0, device_model_domain: <回显>, consistence: true, licenses: [...]}
+   ├─ 预置 7 种类型示例证书（type 0~6: 授权区/圆形/国家/限高/多边形/功率/RID）
+   ├─ switch 修改的 enabled 状态反映到 list 返回的 common_fields.enabled
+   └─ 模拟器不区分飞行器/机场证书源，均返回相同的模拟证书列表
+
 ## 6. 协议覆盖（Dock1/Dock2/Dock3）
 
 基于 DJI Cloud API 文档（以 Dock3 为主，标注机型差异）：
 - **Topic**：osd/state/services/services_reply/events/events_reply/requests/requests_reply/status/status_reply/property/set/property/set_reply
-- **Requests 上行**：config（获取配置）、airport_bind_status、airport_organization_get、airport_organization_bind、storage_config_get、flighttask_resource_get、flighttask_progress_get
-- **Events 上行**：flighttask_ready、flighttask_progress、return_home_info、file_upload_callback、device_exit_homing_notify、highest_priority_upload_flighttask_media、in_flight_wayline_progress、fly_to_point_progress、takeoff_to_point_progress、obstacle_avoidance_notify（仅 Dock3）、joystick_invalid_notify、camera_photo_take_progress、poi_status_notify（仅 Dock1）、远程调试 Job 进度事件（cover_open/close/force_close、drone_open/close、charge_open/close、device_reboot、device_format、drone_format、esim_activate/operator_switch、rtk_calibration）
-- **Services 下行**：flighttask_prepare、flighttask_execute、flighttask_pause、flighttask_recovery、flighttask_undo、flighttask_stop、return_home、return_home_cancel、return_specific_home、live_start_push、live_stop_push、live_set_quality、live_camera_change、live_lens_change、in_flight_wayline_deliver/stop/recover/cancel、upload_flighttask_media_prioritize、drc_mode_enter、drc_mode_exit、takeoff_to_point、fly_to_point、fly_to_point_stop、fly_to_point_update、flight_authority_grab、payload_authority_grab、负载控制指令（camera_frame_zoom、camera_mode_switch、camera_photo_take、camera_photo_stop、camera_recording_start、camera_recording_stop、camera_screen_drag、camera_aim、camera_focal_length_set、gimbal_reset、camera_look_at、camera_screen_split、photo_storage_set、video_storage_set、camera_exposure_mode_set、camera_exposure_set、camera_focus_mode_set、camera_focus_value_set、camera_point_focus_action、ir_metering_mode_set、ir_metering_point_set、ir_metering_area_set）、远程调试指令（cover_open/close/force_close、drone_open/close、charge_open/close、device_reboot、device_format、drone_format、debug_mode_open/close、supplement_light_open/close、battery_maintenance/store_mode_switch、alarm_state_switch、air_conditioner_mode_switch、sdr_workmode_switch、sim_slot_switch、esim_activate/operator_switch、rtk_calibration、putter_open/close（仅 Dock1））
+- **Requests 上行**：config（获取配置）、airport_bind_status、airport_organization_get、airport_organization_bind、storage_config_get、flighttask_resource_get、flighttask_progress_get、flight_areas_get
+- **Events 上行**：flighttask_ready、flighttask_progress、return_home_info、file_upload_callback、device_exit_homing_notify、highest_priority_upload_flighttask_media、in_flight_wayline_progress、fly_to_point_progress、takeoff_to_point_progress、obstacle_avoidance_notify（仅 Dock3）、joystick_invalid_notify、camera_photo_take_progress、poi_status_notify（仅 Dock1）、远程调试 Job 进度事件（cover_open/close/force_close、drone_open/close、charge_open/close、device_reboot、device_format、drone_format、esim_activate/operator_switch、rtk_calibration）、airsense_warning、flight_areas_drone_location、flight_areas_sync_progress、PSDK 事件（Dock1/Dock2/Dock3，speaker_tts_play_start_progress、speaker_audio_play_start_progress、psdk_floating_window_text、psdk_ui_resource_upload_result、custom_data_transmission_from_psdk，need_reply=0 单向通知）+ ESDK 事件（Dock1/Dock2/Dock3，custom_data_transmission_from_esdk，need_reply=0 单向通知）+ 远程日志事件（Dock1/Dock2/Dock3，fileupload_progress，need_reply=0 单向通知）
+- **Services 下行**：flighttask_prepare、flighttask_execute、flighttask_pause、flighttask_recovery、flighttask_undo、flighttask_stop、return_home、return_home_cancel、return_specific_home、live_start_push、live_stop_push、live_set_quality、live_camera_change、live_lens_change、in_flight_wayline_deliver/stop/recover/cancel、upload_flighttask_media_prioritize、drc_mode_enter、drc_mode_exit、takeoff_to_point、fly_to_point、fly_to_point_stop、fly_to_point_update、flight_authority_grab、payload_authority_grab、负载控制指令（camera_frame_zoom、camera_mode_switch、camera_photo_take、camera_photo_stop、camera_recording_start、camera_recording_stop、camera_screen_drag、camera_aim、camera_focal_length_set、gimbal_reset、camera_look_at、camera_screen_split、photo_storage_set、video_storage_set、camera_exposure_mode_set、camera_exposure_set、camera_focus_mode_set、camera_focus_value_set、camera_point_focus_action、ir_metering_mode_set、ir_metering_point_set、ir_metering_area_set）、远程调试指令（cover_open/close/force_close、drone_open/close、charge_open/close、device_reboot、device_format、drone_format、debug_mode_open/close、supplement_light_open/close、battery_maintenance/store_mode_switch、alarm_state_switch、air_conditioner_mode_switch、sdr_workmode_switch、sim_slot_switch、esim_activate/operator_switch、rtk_calibration、putter_open/close（仅 Dock1））、flight_areas_update、unlock_license_switch（Dock1/Dock2/Dock3）、unlock_license_update（Dock1/Dock2/Dock3）、unlock_license_list（Dock1/Dock2/Dock3）、PSDK 喊话器指令（Dock1/Dock2/Dock3，speaker_play_volume_set、speaker_play_mode_set、speaker_play_stop、speaker_replay、speaker_tts_play_start、speaker_audio_play_start、psdk_input_box_text_set、psdk_widget_value_set、custom_data_transmission_to_psdk，同步 Service 仅回 result=0）+ ESDK 互联互通指令（Dock1/Dock2/Dock3，custom_data_transmission_to_esdk，同步 Service 仅回 result=0）+ 远程日志指令（Dock1/Dock2/Dock3，fileupload_start/fileupload_update，同步 Service 仅回 result=0，fileupload_start 异步模拟上传进度）
 - **DRC 下行**（drc/down）：stick_control（杆量控制）、drone_control（已废弃，记录 P-9 诊断码）、drone_emergency_stop、drc_force_landing、drc_emergency_landing、drc_camera_night_mode_set、drc_camera_denoise_level_set、drc_camera_night_vision_enable、drc_infrared_fill_light_enable、drc_light_brightness_set、drc_light_mode_set、drc_light_fine_tuning_set、drc_light_calibration、drc_speaker_play_mode_set、drc_speaker_tts_set、drc_speaker_play_volume_set、drc_speaker_play_stop、drc_speaker_replay、heart_beat
 - **DRC 上行**（drc/up）：hsi_info_push（避障信息）、delay_info_push（图传延时）、osd_info_push（高频 OSD）、drc_drone_state_push、drc_camera_state_push、drc_camera_osd_info_push、drc_psdk_floating_window_text、drc_psdk_state_info、drc_psdk_ui_resource、drc_ai_info_push、drc_speaker_play_progress
 - **OSD**：mode_code、cover_state、putter_state、drone_in_dock、drone_charge_state、electric_supply_voltage、temperature、humidity、wind_speed、rainfall、latitude/longitude/height、storage、position_state、backup_battery、network_state、wireless_link、sub_device 等
@@ -579,7 +693,9 @@ hivemind-simulator/
 │   │   ├── MediaUploader.java                 # S3 兼容文件上传（ali/aws/minio/obs）
 │   │   ├── StorageConfig.java                 # 对象存储 STS 凭证（解析自 storage_config_get 回复）
 │   │   ├── HmsSimulator.java                  # HMS 告警上报
-│   │   ├── DrcCommandHandler.java             # DRC 远程指挥调度
+│   │   ├── AirSenseSimulator.java             # AirSense 告警上报
+│   │   ├── FlightAreaSimulator.java           # 自定义飞行区模拟
+│   │   ├── DrcCommandHandler.java             # DRC 指挥调度
 │   │   ├── FlightCommandSimulator.java        # 飞行指令模拟
 │   │   └── RemoteDebugSimulator.java          # 远程调试模拟
 │   └── web/
@@ -630,7 +746,7 @@ hivemind-simulator/
 
 ## 14. 不实现的部分（YAGNI）
 
-- 固件升级、远程日志、自定义飞行区
+- 固件升级、远程日志
 - DRC 远程控制（remote-control.html）与指令飞行（drc.html）已实现，但仅做协议应答与进度模拟，不模拟真实飞控物理行为
 - 真实视频推流（只做协议应答）
 - 真实 KMZ 航线解析（任务进度按时间假推进）
@@ -936,3 +1052,133 @@ sequenceDiagram
 | M400 | 103 | 0 | Matrice 400 |
 | M4E | 99 | 0 | DJI Matrice 4E |
 | M4T | 99 | 1 | DJI Matrice 4T |
+
+### 16.9 平台功能支持差异分析
+
+> 分析 Pilot 上云（单兵无人机）与机场上云（无人值守）在平台功能支持上的差异，作为模拟器功能覆盖范围的设计依据。
+
+#### 架构定位差异
+
+| 维度 | Pilot 上云（单兵） | 机场上云（无人值守） |
+|---|---|---|
+| 操作者 | 飞手在现场，手持遥控器 | 平台远程操控，无人现场 |
+| 网关设备 | 遥控器（RC Plus 2 / RC Pro） | 机场（Dock1/2/3） |
+| 飞行器控制权 | Pilot 主控，平台可"接管"（需授权） | 平台全权控制（无需授权） |
+| 核心价值 | 平台辅助监控 + 远程协助 | 平台全自动作业 |
+
+#### 飞行控制
+
+| 功能 | Pilot 上云 | 机场上云 | 差异原因 |
+|---|---|---|---|
+| 航线任务执行 | ❌ 不支持（Pilot 自主导航） | ✅ flighttask 全流程 | 机场无人现场，需平台下发任务 |
+| DRC 远程控制 | ✅ 需授权后接管 | ✅ 直接控制 | Pilot 需飞手同意，机场无人在场 |
+| 一键起飞/flyto | ✅ DRC 通道 | ✅ DRC 通道 | 相同 |
+| 返航/紧急停止 | ✅ DRC 通道 | ✅ DRC 通道 | 相同 |
+| 云台/负载控制 | ✅ DRC 通道（drc_camera_*） | ✅ services 通道 | 通道不同 |
+
+**关键差异**：Pilot 的 DRC 远程控制需要先经过 `cloud_control_auth` 授权流程，而机场默认由平台控制，无需授权。
+
+#### 航线管理
+
+| 功能 | Pilot 上云 | 机场上云 |
+|---|---|---|
+| 航线列表获取 | ✅ HTTP `GET /wayline/api/v1/.../waylines` | ❌ 不涉及 |
+| 航线下载 | ✅ HTTP `GET /waylines/{id}/url` | ✅ MQTT flighttask 下发时自动下载 |
+| 航线上传 | ✅ HTTP `POST /upload-callback` | ❌ 不涉及 |
+| 航线收藏 | ✅ HTTP `POST/DELETE /favorites` | ❌ 不涉及 |
+| 航线任务执行 | ❌ Pilot 自主执行 | ✅ MQTT `flighttask_create/prepared` |
+
+**关键差异**：Pilot 通过 HTTP 主动管理航线文件，机场通过 MQTT 被动接收平台下发的航线任务。
+
+#### 媒体管理
+
+| 功能 | Pilot 上云 | 机场上云 |
+|---|---|---|
+| 文件快传（秒传） | ✅ HTTP `POST /media/.../fast-upload` | ❌ 不支持 |
+| 精简指纹查询 | ✅ HTTP `POST /files/tiny-fingerprints` | ❌ 不支持 |
+| STS 凭证获取 | ✅ HTTP `POST /storage/.../sts` | ✅ MQTT `storage_config_get` |
+| 文件上传回调 | ✅ HTTP `POST /upload-callback` | ✅ MQTT `file_upload_finish` 事件 |
+| 文件组回调 | ✅ HTTP `POST /group-upload-callback` | ❌ 不支持 |
+| 自动上传 | ✅ Pilot 配置 autoUpload | ✅ 机场任务结束后自动上传 |
+
+**关键差异**：Pilot 通过 HTTP 主动管理媒体（含秒传机制），机场通过 MQTT 被动上传。
+
+#### 直播功能
+
+| 功能 | Pilot 上云 | 机场上云 |
+|---|---|---|
+| 直播发起 | ✅ 手动直播（liveshare） | ✅ 航线任务自动直播 |
+| 直播方式 | video-on-demand / video-by-manual | 按航线任务自动推流 |
+| 镜头切换 | ✅ drc_live_lens_change | ✅ services live_lens_change |
+
+**关键差异**：Pilot 是飞手手动发起直播，机场是平台按任务自动发起直播。
+
+#### 地图元素（Pilot 专有）
+
+| 功能 | Pilot 上云 | 机场上云 |
+|---|---|---|
+| 元素 CRUD | ✅ HTTP API | ❌ 不涉及 |
+| 元素推送 | ✅ WebSocket（create/update/delete/refresh） | ❌ 不涉及 |
+
+地图元素是 Pilot 专有功能，多个 Pilot 之间可通过 WebSocket 推送实现地图元素协作。
+
+#### 态势感知（Pilot 专有）
+
+| 功能 | Pilot 上云 | 机场上云 |
+|---|---|---|
+| 设备拓扑获取 | ✅ HTTP `GET /manage/.../devices/topologies` | ❌ 不涉及 |
+| 设备 OSD 推送 | ✅ WebSocket `device_osd` | ❌ 不涉及 |
+| 设备上下线推送 | ✅ WebSocket `device_online/offline` | ❌ 不涉及 |
+| 设备拓扑更新推送 | ✅ WebSocket `device_update_topo` | ❌ 不涉及 |
+
+态势感知是 Pilot 专有功能。Pilot 需要看到工作空间内所有设备（其他 Pilot + 机场）的位置和状态，机场不需要感知其他设备。
+
+#### 机场专属功能（Pilot 不涉及）
+
+| 功能 | 机场上云 | 说明 |
+|---|---|---|
+| 机场设备控制 | ✅ cover/putter/charge/air_conditioner | 舱盖、推杆、充电、空调 |
+| 远程调试 | ✅ services `remote_debug` | 机场/飞行器参数远程调试 |
+| OTA 固件升级 | ✅ services `ota_create` | 远程固件升级 |
+| 日志管理 | ✅ services `file_upload_list/start` | 远程日志拉取 |
+| 设备绑定/解绑 | ✅ airport_organization_bind | 机场注册绑定流程 |
+| HMS 告警 | ✅ events `device_hms` | 硬件健康告警 |
+
+#### Pilot 专属功能（机场不涉及）
+
+| 功能 | Pilot 上云 | 说明 |
+|---|---|---|
+| 云端控制授权 | ✅ cloud_control_auth | 飞手同意后平台才能接管 |
+| DRC 模式切换 | ✅ drc_mode_enter/exit | 进入/退出 DRC 模式 |
+| DRC 高频 OSD | ✅ drc/up `osd_info_push` | DRC 模式下高频状态推送 |
+| POI 环绕 | ✅ services `poi_mode_enter` | 兴趣点环绕飞行 |
+| 地图元素协作 | ✅ HTTP + WebSocket | 多 Pilot 共享地图元素 |
+| 态势感知 | ✅ HTTP + WebSocket | 感知工作空间内所有设备 |
+| MOP 数据传输 | ✅ WebSocket | 自定义数据通道 |
+
+#### 核心差异本质
+
+| 本质差异 | Pilot 上云 | 机场上云 |
+|---|---|---|
+| 控制权 | 飞手主控，平台辅助 | 平台主控，无人现场 |
+| 交互方式 | HTTP 为主（主动获取） | MQTT 为主（被动接收） |
+| 授权模型 | 需飞手授权（cloud_control_auth） | 平台默认全权 |
+| 协作需求 | 高（多 Pilot + 机场协同） | 低（机场独立作业） |
+| 自动化程度 | 低（飞手操作） | 高（全自动） |
+
+#### 模拟器覆盖情况
+
+模拟器已实现的 Pilot 上云功能（含 HTTP/WebSocket/JSBridge 配置参数化）：
+
+| 功能 | 实现状态 | 实现方式 |
+|---|---|---|
+| MQTT 上线/OSD/State | ✅ 已实现 | PilotOnlineService + ControllerOsdBuilder |
+| DRC 远程控制 | ✅ 已实现 | DrcCommandHandler + DrcProtocol 策略 |
+| 云控授权 | ✅ 已实现 | CloudControlAuthHandler |
+| 地图元素 CRUD | ✅ 已实现 | MapElementApi + MapElementSimulator |
+| 地图元素 WebSocket 推送 | ✅ 已实现 | HivemindWsClient + MapElementWsHandler |
+| 态势感知（设备拓扑 + WebSocket 推送） | ✅ 已实现 | DeviceTopoApi + SituationAwarenessWsHandler |
+| 媒体管理 HTTP API | ✅ 已实现 | MediaApi + StorageApi |
+| 航线管理 HTTP API | ✅ 已实现 | WaylineApi |
+| JSBridge 参数配置 | ✅ 已实现 | /api/config/pilot + /api/mop/* |
+| MOP 数据传输 | ✅ 已实现 | MopClient |

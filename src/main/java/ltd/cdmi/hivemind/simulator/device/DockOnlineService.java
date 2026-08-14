@@ -21,8 +21,9 @@ import ltd.cdmi.hivemind.simulator.config.SimulatorProperties;
 import ltd.cdmi.hivemind.simulator.config.RuntimeConfig;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticCode;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
+import ltd.cdmi.hivemind.simulator.mqtt.DockTopicSchema;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
-import ltd.cdmi.hivemind.simulator.mqtt.TopicConstants;
+import ltd.cdmi.hivemind.simulator.mqtt.TopicSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -52,9 +53,6 @@ public class DockOnlineService {
     /** config 请求重试间隔（秒） */
     private static final long CONFIG_RETRY_INTERVAL_SECONDS = 3;
 
-    /** DJI 上云 API 组织绑定错误码（参考 hivemind OrganizationBindErrorCode），直接透传不加前缀 */
-    public static final int BIND_CODE_INVALID = 210229;
-
     /** 上线流程结果：success + code（"0"=成功，P/S/M 码=诊断错误，DJI 码如 210229=协议层错误） */
     public record OnlineResult(boolean success, String code) {
         public static OnlineResult ok() { return new OnlineResult(true, "0"); }
@@ -68,29 +66,42 @@ public class DockOnlineService {
     private final ObjectMapper objectMapper;
     private final RuntimeConfig runtimeConfig;
     private final DiagnosticLogRecorder diagnosticRecorder;
+    private final TopicSchema dockTopicSchema;
 
     /** tid → CompletableFuture，用于等待 status_reply / requests_reply */
     private final ConcurrentHashMap<String, CompletableFuture<JsonNode>> pendingReplies = new ConcurrentHashMap<>();
 
+    /** 已注册 reply 监听器的 dockSn（dockSn 变化时需重新注册） */
+    private volatile String registeredReplyDockSn;
+
     public DockOnlineService(SimulatorProperties props, MqttClientManager mqtt, DeviceState state,
                              ObjectMapper objectMapper, RuntimeConfig runtimeConfig,
-                             DiagnosticLogRecorder diagnosticRecorder) {
+                             DiagnosticLogRecorder diagnosticRecorder,
+                             DockTopicSchema dockTopicSchema) {
         this.props = props;
         this.mqtt = mqtt;
         this.state = state;
         this.objectMapper = objectMapper;
         this.runtimeConfig = runtimeConfig;
         this.diagnosticRecorder = diagnosticRecorder;
-        registerListeners();
+        this.dockTopicSchema = dockTopicSchema;
+        ensureReplyListeners();
     }
 
     /**
-     * 注册 status_reply 和 requests_reply 监听器，匹配 tid 完成等待。
+     * 确保 status_reply 和 requests_reply 监听器已注册（dockSn 变化时重新注册）。
+     * <p>切换 Dock 类型时 {@link RuntimeConfig#setDockType} 会自动更新 dockSn，
+     * 此方法确保监听器始终绑定当前 dockSn 对应的 topic。</p>
      */
-    private void registerListeners() {
+    private void ensureReplyListeners() {
         String dockSn = runtimeConfig.getDockSn();
-        mqtt.addListener(TopicConstants.topic(TopicConstants.STATUS_REPLY, dockSn), this::handleReply);
-        mqtt.addListener(TopicConstants.topic(TopicConstants.REQUESTS_REPLY, dockSn), this::handleReply);
+        if (dockSn.equals(registeredReplyDockSn)) {
+            return;
+        }
+        mqtt.addListener(dockTopicSchema.topic(dockTopicSchema.statusReply(), dockSn), this::handleReply);
+        mqtt.addListener(dockTopicSchema.topic(dockTopicSchema.requestsReply(), dockSn), this::handleReply);
+        registeredReplyDockSn = dockSn;
+        log.info("DockOnlineService 已注册 reply 监听器: dockSn={}", dockSn);
     }
 
     /**
@@ -117,9 +128,9 @@ public class DockOnlineService {
      * <p>时序（与 DJI Cloud API 机场上云交互规范一致）：
      * <ol>
      *   <li>config 请求（获取 License 校验所需参数，超时重试3次间隔3秒）</li>
-     *   <li>airport_bind_status 查询设备绑定信息</li>
-     *   <li>airport_organization_get 查询组织信息（result=210229 表示绑定码错误）</li>
-     *   <li>airport_organization_bind 绑定到组织（result=210229 表示绑定码错误）</li>
+     *   <li>airport_bind_status 查询设备绑定信息（result≠0 表示错误，停止注册并透传 result）</li>
+     *   <li>airport_organization_get 查询组织信息（result≠0 表示错误，停止注册并透传 result）</li>
+     *   <li>airport_organization_bind 绑定到组织（result≠0 停止注册；result=0 但 err_infos 非空表示设备级失败，透传第一个 err_code）</li>
      *   <li>update_topo 上线（注册成功后通知平台设备拓扑，对齐 DJI 行为：超时不停止流程）</li>
      * </ol>
      * @return OnlineResult，success=true 表示上线成功
@@ -178,6 +189,7 @@ public class DockOnlineService {
             }
 
             // 2. 发 airport_bind_status 查询绑定状态
+            //    result≠0 表示请求级错误，停止注册；result=0 时不根据 bind_status 内容跳过后续步骤（TC-REG-003）
             JsonNode bindStatusReply = sendRequest("airport_bind_status", Map.of(
                     "devices", List.of(
                             Map.of("sn", runtimeConfig.getDockSn()),
@@ -189,9 +201,13 @@ public class DockOnlineService {
                 return OnlineResult.fail(DiagnosticCode.PLATFORM_NO_REPLY);
             }
             log.info("airport_bind_status 回复: result={}", bindStatusReply.path("data").path("result").asText());
+            OnlineResult bindStatusResult = checkBindStatusResult(bindStatusReply);
+            if (!bindStatusResult.success()) {
+                return bindStatusResult;
+            }
 
             // 3. 发 airport_organization_get 查询组织信息（绑定码运行时可配）
-            //    hivemind 据此校验绑定码：result=210229 表示绑定码错误
+            //    hivemind 据此校验绑定码：result≠0 表示错误（210229 绑定码错误等）
             String bindCode = runtimeConfig.getDeviceBindingCode();
             JsonNode orgGetReply = sendRequest("airport_organization_get", Map.of(
                     "device_binding_code", bindCode,
@@ -201,15 +217,15 @@ public class DockOnlineService {
                 log.warn("airport_organization_get 超时，平台无响应，停止注册流程");
                 return OnlineResult.fail(DiagnosticCode.PLATFORM_NO_REPLY);
             }
-            int orgGetResult = orgGetReply.path("data").path("result").asInt(-1);
-            log.info("airport_organization_get 回复: result={}", orgGetResult);
-            if (orgGetResult == BIND_CODE_INVALID) {
-                log.warn("绑定码校验失败: device_binding_code={}", bindCode);
-                return OnlineResult.fail(BIND_CODE_INVALID);
+            log.info("airport_organization_get 回复: result={}", orgGetReply.path("data").path("result").asText());
+            OnlineResult orgGetResult = checkOrgGetResult(orgGetReply);
+            if (!orgGetResult.success()) {
+                log.warn("组织信息查询失败: device_binding_code={}", bindCode);
+                return orgGetResult;
             }
 
             // 4. 发 airport_organization_bind 绑定到组织（组织ID/绑定码运行时可配）
-            //    hivemind 据此将设备注册并绑定到项目：result=210229 表示绑定码错误
+            //    hivemind 据此将设备注册并绑定到项目：result≠0 表示错误；result=0 但 err_infos 非空表示设备级失败
             String orgId = runtimeConfig.getOrganizationId();
             JsonNode orgBindReply = sendRequest("airport_organization_bind", Map.of(
                     "bind_devices", List.of(
@@ -233,11 +249,10 @@ public class DockOnlineService {
                 log.warn("airport_organization_bind 超时，平台无响应，停止注册流程");
                 return OnlineResult.fail(DiagnosticCode.PLATFORM_NO_REPLY);
             }
-            int orgBindResult = orgBindReply.path("data").path("result").asInt(-1);
-            log.info("airport_organization_bind 回复: result={}", orgBindResult);
-            if (orgBindResult == BIND_CODE_INVALID) {
-                log.warn("绑定失败: 绑定码错误");
-                return OnlineResult.fail(BIND_CODE_INVALID);
+            log.info("airport_organization_bind 回复: result={}", orgBindReply.path("data").path("result").asText());
+            OnlineResult orgBindResult = checkOrgBindResult(orgBindReply);
+            if (!orgBindResult.success()) {
+                return orgBindResult;
             }
 
             log.info("机场注册成功: dockSn={}, droneSn={}", runtimeConfig.getDockSn(), runtimeConfig.getDroneSn());
@@ -262,6 +277,73 @@ public class DockOnlineService {
             log.error("上线流程异常: {}", e.getMessage(), e);
             return OnlineResult.fail(DiagnosticCode.SIMULATOR_PARSE_BUG);
         }
+    }
+
+    /**
+     * 解析 airport_bind_status 回复，判断绑定状态查询是否成功。
+     * <p>判断逻辑：result≠0 表示请求级错误，透传 result 码。
+     * <p>注意：result=0 时不根据 bind_status 内容（如 is_device_bind_organization）跳过后续步骤，
+     * 每一步无条件执行（TC-REG-003）。
+     *
+     * @param reply airport_bind_status 回复 JSON
+     * @return OnlineResult，success=true 表示查询成功
+     */
+    public OnlineResult checkBindStatusResult(JsonNode reply) {
+        int result = reply.path("data").path("result").asInt(-1);
+        if (result != 0) {
+            log.warn("绑定状态查询失败: result={}", result);
+            return OnlineResult.fail(result);
+        }
+        return OnlineResult.ok();
+    }
+
+    /**
+     * 解析 airport_organization_get 回复，判断组织信息查询是否成功。
+     * <p>判断逻辑：result≠0 表示错误（210229 绑定码错误、210234 组织不存在等），透传 result 码。
+     *
+     * @param reply airport_organization_get 回复 JSON
+     * @return OnlineResult，success=true 表示查询成功
+     */
+    public OnlineResult checkOrgGetResult(JsonNode reply) {
+        int result = reply.path("data").path("result").asInt(-1);
+        if (result != 0) {
+            log.warn("组织信息查询失败: result={}", result);
+            return OnlineResult.fail(result);
+        }
+        return OnlineResult.ok();
+    }
+
+    /**
+     * 解析 airport_organization_bind 回复，判断设备绑定是否成功。
+     * <p>判断逻辑（对齐 Dock2 协议）：
+     * <ol>
+     *   <li>result≠0：整体请求失败，透传 result 码</li>
+     *   <li>result=0 但 output.err_infos 非空：设备级绑定失败，透传第一个 err_code</li>
+     *   <li>result=0 且 err_infos 为空/不存在：绑定成功</li>
+     * </ol>
+     * <p>err_infos 非空即失败的判断逻辑为推断（DJI 文档未明确 err_code=0 是否会出现），
+     * 记录 M-2 诊断日志待真机验证。
+     *
+     * @param reply airport_organization_bind 回复 JSON
+     * @return OnlineResult，success=true 表示绑定成功
+     */
+    public OnlineResult checkOrgBindResult(JsonNode reply) {
+        int result = reply.path("data").path("result").asInt(-1);
+        if (result != 0) {
+            log.warn("设备绑定失败: result={}", result);
+            return OnlineResult.fail(result);
+        }
+        // 检查 err_infos（逐设备错误码，Dock2 协议：result=0 但 err_infos 非空表示设备级绑定失败）
+        JsonNode errInfos = reply.path("data").path("output").path("err_infos");
+        if (errInfos.isArray() && errInfos.size() > 0) {
+            int firstErrCode = errInfos.get(0).path("err_code").asInt(-1);
+            log.warn("设备绑定失败: err_infos={}", errInfos);
+            diagnosticRecorder.record(DiagnosticCode.MONITOR_SIMULATOR_INFERENCE, "airport_organization_bind",
+                    "err_infos 非空判定为绑定失败（DJI 文档未明确 err_code=0 是否会出现，推断 err_infos 只含失败设备），"
+                            + "第一个 err_code=" + firstErrCode + "，完整 err_infos=" + errInfos);
+            return OnlineResult.fail(firstErrCode);
+        }
+        return OnlineResult.ok();
     }
 
     /**
@@ -419,6 +501,7 @@ public class DockOnlineService {
     }
 
     private boolean sendUpdateTopo() {
+        ensureReplyListeners();
         String tid = UUID.randomUUID().toString();
         String bid = UUID.randomUUID().toString();
 
@@ -454,6 +537,7 @@ public class DockOnlineService {
      * @return 回复 JSON，超时返回 null
      */
     public JsonNode sendRequest(String method, Map<String, Object> data) {
+        ensureReplyListeners();
         String tid = UUID.randomUUID().toString();
         String bid = UUID.randomUUID().toString();
 
@@ -482,7 +566,7 @@ public class DockOnlineService {
         envelope.put("tid", tid);
         envelope.put("timestamp", System.currentTimeMillis());
         envelope.put("method", method);
-        String topic = TopicConstants.topic(TopicConstants.STATUS, runtimeConfig.getDockSn());
+        String topic = dockTopicSchema.topic(dockTopicSchema.status(), runtimeConfig.getDockSn());
         mqtt.publishJson(topic, envelope);
         log.info("已发送 status: method={}, tid={}", method, tid);
     }
@@ -498,7 +582,7 @@ public class DockOnlineService {
         envelope.put("gateway", runtimeConfig.getDockSn());
         envelope.put("method", method);
         envelope.put("data", data);
-        String topic = TopicConstants.topic(TopicConstants.REQUESTS, runtimeConfig.getDockSn());
+        String topic = dockTopicSchema.topic(dockTopicSchema.requests(), runtimeConfig.getDockSn());
         mqtt.publishJson(topic, envelope);
         log.info("已发送 requests: method={}, tid={}", method, tid);
     }
@@ -550,7 +634,7 @@ public class DockOnlineService {
         envelope.put("gateway", runtimeConfig.getDockSn());
         envelope.put("data", data);
 
-        String topic = TopicConstants.topic(TopicConstants.STATE, runtimeConfig.getDockSn());
+        String topic = dockTopicSchema.topic(dockTopicSchema.state(), runtimeConfig.getDockSn());
         mqtt.publishJson(topic, envelope);
         log.info("已上报 live_capacity（state topic）");
     }
@@ -651,7 +735,7 @@ public class DockOnlineService {
         envelope.put("timestamp", System.currentTimeMillis());
         envelope.put("gateway", runtimeConfig.getDockSn());
 
-        String topic = TopicConstants.topic(TopicConstants.STATE, runtimeConfig.getDockSn());
+        String topic = dockTopicSchema.topic(dockTopicSchema.state(), runtimeConfig.getDockSn());
         mqtt.publishJson(topic, envelope);
         log.info("已推送 dock state（{} 属性）", data.size());
     }
@@ -692,6 +776,9 @@ public class DockOnlineService {
         // commander_mode_lost_action — 指点飞行失控动作
         data.put("commander_mode_lost_action", 0);
 
+        // commander_flight_mode — 指点飞行模式设置值（pushMode=1, rw）
+        data.put("commander_flight_mode", 0);
+
         // current_commander_flight_mode — 指点飞行模式当前值
         data.put("current_commander_flight_mode", 0);
 
@@ -702,7 +789,10 @@ public class DockOnlineService {
         data.put("mode_code_reason", 0);
 
         // firmware_version — 固件版本
-        data.put("firmware_version", "0.0.0.0");
+        // M400 Pilot 模式 pushMode=0（OSD 主题上报），state 主题不上报顶层 firmware_version
+        if (droneType != DeviceType.M400) {
+            data.put("firmware_version", "0.0.0.0");
+        }
 
         // compatible_status — 固件一致性
         data.put("compatible_status", 0);
@@ -724,10 +814,11 @@ public class DockOnlineService {
         data.put("serious_low_battery_warning_threshold", 20);
 
         // rth_mode / current_rth_mode — 返航高度模式（机场只支持设定高度=1）
-        // rth_mode 仅 M3D/M4D 文档有（M30 文档无此字段），current_rth_mode 三版共有
+        // rth_mode M3D/M4D/M400 文档有（M30 文档无此字段），current_rth_mode 各版共有
         data.put("current_rth_mode", 1);
         if (droneType == DeviceType.M3D || droneType == DeviceType.M3TD
-                || droneType == DeviceType.M4D || droneType == DeviceType.M4TD) {
+                || droneType == DeviceType.M4D || droneType == DeviceType.M4TD
+                || droneType == DeviceType.M400) {
             data.put("rth_mode", 1);
         }
 
@@ -781,13 +872,59 @@ public class DockOnlineService {
             data.put("wireless_link_topo", wirelessLinkTopo);
         }
 
+        // M400 Pilot 特有字段（pushMode=1）
+        // 核实依据：M400 Pilot 设备属性列表第一部分+第二部分
+        // 待真机验证：offline_map_enable/dongle_infos/camera_watermark_settings 是否 M400 特有（其他机型文档未核实）
+        if (droneType == DeviceType.M400) {
+            // offline_map_enable — 离线地图开关（pushMode=1, r）
+            data.put("offline_map_enable", 0);  // 0=关闭
+
+            // dongle_infos — 4G Dongle 信息（pushMode=1, r）
+            List<Map<String, Object>> dongleInfos = new ArrayList<>();
+            Map<String, Object> dongle = new LinkedHashMap<>();
+            dongle.put("imei", "000000000000000");
+            dongle.put("dongle_type", 10);        // 10=支持 eSIM 的新 Dongle
+            dongle.put("eid", "00000000000000000000000000000000");
+            dongle.put("esim_activate_state", 1); // 1=已激活
+            dongle.put("sim_card_state", 1);      // 1=已插入
+            dongle.put("sim_slot", 2);            // 2=eSIM
+            // esim_infos — eSIM 信息数组
+            List<Map<String, Object>> esimInfos = new ArrayList<>();
+            Map<String, Object> esim = new LinkedHashMap<>();
+            esim.put("telecom_operator", 1);      // 1=移动
+            esim.put("enabled", true);
+            esim.put("iccid", "0000000000000000000");
+            esimInfos.add(esim);
+            dongle.put("esim_infos", esimInfos);
+            // sim_info — 实体 SIM 卡信息
+            Map<String, Object> simInfo = new LinkedHashMap<>();
+            simInfo.put("telecom_operator", 0);   // 0=未知
+            simInfo.put("sim_type", 0);           // 0=未知
+            simInfo.put("iccid", "");
+            dongle.put("sim_info", simInfo);
+            dongleInfos.add(dongle);
+            data.put("dongle_infos", dongleInfos);
+
+            // camera_watermark_settings — 相机水印设置（pushMode=1, rw）
+            Map<String, Object> cameraWatermarkSettings = new LinkedHashMap<>();
+            cameraWatermarkSettings.put("global_enable", 0);             // 0=关闭
+            cameraWatermarkSettings.put("drone_type_enable", 0);
+            cameraWatermarkSettings.put("drone_sn_enable", 0);
+            cameraWatermarkSettings.put("datetime_enable", 0);
+            cameraWatermarkSettings.put("gps_enable", 0);
+            cameraWatermarkSettings.put("user_custom_string_enable", 0);
+            cameraWatermarkSettings.put("user_custom_string", "");
+            cameraWatermarkSettings.put("layout", 0);                    // 0=左上
+            data.put("camera_watermark_settings", cameraWatermarkSettings);
+        }
+
         Map<String, Object> envelope = new LinkedHashMap<>();
         envelope.put("bid", UUID.randomUUID().toString());
         envelope.put("data", data);
         envelope.put("tid", UUID.randomUUID().toString());
         envelope.put("timestamp", System.currentTimeMillis());
 
-        String topic = TopicConstants.topic(TopicConstants.STATE, runtimeConfig.getDroneSn());
+        String topic = dockTopicSchema.topic(dockTopicSchema.state(), runtimeConfig.getDroneSn());
         mqtt.publishJson(topic, envelope);
         log.info("已推送 drone state（{} 属性）", data.size());
     }

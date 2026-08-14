@@ -54,14 +54,39 @@ public class RuntimeConfig {
     private volatile boolean liveRealPushEnabled;
     private volatile String liveFfmpegPath;
     private volatile String liveVideoDir;
+    /** 直播方式（JSBridge live 模块 video-publish-type）：video-on-demand/video-by-manual/video-demand-aux-manual */
+    private volatile String liveVideoPublishType;
 
     /** 媒体上传配置（运行时可由前端覆盖，yml 提供默认值，LiveConfigStore 持久化恢复） */
     private volatile String mediaDir;
+    /** 媒体自动上传配置（JSBridge media 模块参数化，运行时可由前端覆盖） */
+    private volatile boolean mediaAutoUploadPhoto;
+    private volatile int mediaAutoUploadPhotoType;
+    private volatile boolean mediaAutoUploadVideo;
+    private volatile int mediaDownloadOwner;
 
     /** 机场位置（运行时可由前端覆盖，yml 提供默认值，LiveConfigStore 持久化恢复） */
     private volatile double locationLatitude;
     private volatile double locationLongitude;
     private volatile double locationHeight;
+
+    /** hivemind HTTP API 基础地址（Pilot 上云专用，运行时可由前端覆盖） */
+    private volatile String hivemindHttpBaseUrl;
+    /** hivemind HTTP 请求超时（毫秒） */
+    private volatile int hivemindHttpTimeout;
+    /** hivemind HTTP 访问令牌（x-auth-token，Pilot 上云专用，运行时可由前端覆盖） */
+    private volatile String hivemindHttpToken;
+    /** hivemind WebSocket 地址（Pilot 上云专用，运行时可由前端覆盖） */
+    private volatile String hivemindWsUrl;
+    /** hivemind WebSocket 访问令牌（x-auth-token，Pilot 上云专用，运行时可由前端覆盖） */
+    private volatile String hivemindWsToken;
+    /** 地图元素归属用户名（Pilot 上云 map 模块，运行时可由前端覆盖） */
+    private volatile String mapUserName;
+    /** 地图元素名称前缀（Pilot 上云 map 模块，运行时可由前端覆盖） */
+    private volatile String mapElementPreName;
+    /** MOP（Mission Open Platform）数据传输配置（JSBridge mop 模块，运行时可由前端覆盖） */
+    private volatile String mopHost;
+    private volatile String mopToken;
 
     private final LiveConfigStore liveConfigStore;
 
@@ -90,15 +115,29 @@ public class RuntimeConfig {
             this.liveRealPushEnabled = live.realPushEnabled();
             this.liveFfmpegPath = live.ffmpegPath();
             this.liveVideoDir = live.videoDir();
+            this.liveVideoPublishType = live.videoPublishType() != null ? live.videoPublishType() : "video-on-demand";
         } else {
             this.liveRealPushEnabled = false;
             this.liveFfmpegPath = "ffmpeg";
             this.liveVideoDir = "";
+            this.liveVideoPublishType = "video-on-demand";
         }
 
-        // 媒体上传目录（yml 默认值）
+        // 媒体上传配置（yml 默认值）
         SimulatorProperties.Media media = props.media();
-        this.mediaDir = media != null && media.mediaDir() != null ? media.mediaDir() : "";
+        if (media != null) {
+            this.mediaDir = media.mediaDir() != null ? media.mediaDir() : "";
+            this.mediaAutoUploadPhoto = media.autoUploadPhoto();
+            this.mediaAutoUploadPhotoType = media.autoUploadPhotoType();
+            this.mediaAutoUploadVideo = media.autoUploadVideo();
+            this.mediaDownloadOwner = media.downloadOwner();
+        } else {
+            this.mediaDir = "";
+            this.mediaAutoUploadPhoto = false;
+            this.mediaAutoUploadPhotoType = 0;
+            this.mediaAutoUploadVideo = false;
+            this.mediaDownloadOwner = 0;
+        }
 
         // 机场位置（yml 默认值）
         SimulatorProperties.Location loc = props.location();
@@ -110,6 +149,45 @@ public class RuntimeConfig {
             this.locationLatitude = 30.670815;
             this.locationLongitude = 104.071523;
             this.locationHeight = 500.0;
+        }
+
+        // hivemind HTTP/WebSocket 配置（yml 默认值，运行时可由前端覆盖）
+        SimulatorProperties.Hivemind hivemind = props.hivemind();
+        if (hivemind != null && hivemind.http() != null) {
+            this.hivemindHttpBaseUrl = hivemind.http().baseUrl() != null ? hivemind.http().baseUrl() : "";
+            this.hivemindHttpTimeout = hivemind.http().timeout() > 0 ? hivemind.http().timeout() : 5000;
+            this.hivemindHttpToken = hivemind.http().token() != null ? hivemind.http().token() : "";
+        } else {
+            this.hivemindHttpBaseUrl = "";
+            this.hivemindHttpTimeout = 5000;
+            this.hivemindHttpToken = "";
+        }
+        if (hivemind != null && hivemind.websocket() != null) {
+            this.hivemindWsUrl = hivemind.websocket().url() != null ? hivemind.websocket().url() : "";
+            this.hivemindWsToken = hivemind.websocket().token() != null ? hivemind.websocket().token() : "";
+        } else {
+            this.hivemindWsUrl = "";
+            this.hivemindWsToken = "";
+        }
+
+        // 地图模块配置（yml 默认值，运行时可由前端覆盖）
+        SimulatorProperties.Map mapConfig = props.map();
+        if (mapConfig != null) {
+            this.mapUserName = mapConfig.userName() != null ? mapConfig.userName() : "";
+            this.mapElementPreName = mapConfig.elementPreName() != null ? mapConfig.elementPreName() : "";
+        } else {
+            this.mapUserName = "";
+            this.mapElementPreName = "";
+        }
+
+        // MOP 数据传输配置（yml 默认值，运行时可由前端覆盖）
+        SimulatorProperties.Mop mopConfig = props.mop();
+        if (mopConfig != null) {
+            this.mopHost = mopConfig.host() != null ? mopConfig.host() : "";
+            this.mopToken = mopConfig.token() != null ? mopConfig.token() : "";
+        } else {
+            this.mopHost = "";
+            this.mopToken = "";
         }
 
         // 持久化文件覆盖 yml 默认值（文件不存在或读取失败时保持 yml 默认值）
@@ -202,8 +280,23 @@ public class RuntimeConfig {
     public String getLiveVideoDir() { return liveVideoDir; }
     public void setLiveVideoDir(String liveVideoDir) { this.liveVideoDir = liveVideoDir; }
 
+    public String getLiveVideoPublishType() { return liveVideoPublishType; }
+    public void setLiveVideoPublishType(String liveVideoPublishType) { this.liveVideoPublishType = liveVideoPublishType; }
+
     public String getMediaDir() { return mediaDir; }
     public void setMediaDir(String mediaDir) { this.mediaDir = mediaDir; }
+
+    public boolean isMediaAutoUploadPhoto() { return mediaAutoUploadPhoto; }
+    public void setMediaAutoUploadPhoto(boolean mediaAutoUploadPhoto) { this.mediaAutoUploadPhoto = mediaAutoUploadPhoto; }
+
+    public int getMediaAutoUploadPhotoType() { return mediaAutoUploadPhotoType; }
+    public void setMediaAutoUploadPhotoType(int mediaAutoUploadPhotoType) { this.mediaAutoUploadPhotoType = mediaAutoUploadPhotoType; }
+
+    public boolean isMediaAutoUploadVideo() { return mediaAutoUploadVideo; }
+    public void setMediaAutoUploadVideo(boolean mediaAutoUploadVideo) { this.mediaAutoUploadVideo = mediaAutoUploadVideo; }
+
+    public int getMediaDownloadOwner() { return mediaDownloadOwner; }
+    public void setMediaDownloadOwner(int mediaDownloadOwner) { this.mediaDownloadOwner = mediaDownloadOwner; }
 
     public double getLocationLatitude() { return locationLatitude; }
     public void setLocationLatitude(double locationLatitude) { this.locationLatitude = locationLatitude; }
@@ -213,6 +306,33 @@ public class RuntimeConfig {
 
     public double getLocationHeight() { return locationHeight; }
     public void setLocationHeight(double locationHeight) { this.locationHeight = locationHeight; }
+
+    public String getHivemindHttpBaseUrl() { return hivemindHttpBaseUrl; }
+    public void setHivemindHttpBaseUrl(String hivemindHttpBaseUrl) { this.hivemindHttpBaseUrl = hivemindHttpBaseUrl; }
+
+    public int getHivemindHttpTimeout() { return hivemindHttpTimeout; }
+    public void setHivemindHttpTimeout(int hivemindHttpTimeout) { this.hivemindHttpTimeout = hivemindHttpTimeout; }
+
+    public String getHivemindHttpToken() { return hivemindHttpToken; }
+    public void setHivemindHttpToken(String hivemindHttpToken) { this.hivemindHttpToken = hivemindHttpToken; }
+
+    public String getHivemindWsUrl() { return hivemindWsUrl; }
+    public void setHivemindWsUrl(String hivemindWsUrl) { this.hivemindWsUrl = hivemindWsUrl; }
+
+    public String getHivemindWsToken() { return hivemindWsToken; }
+    public void setHivemindWsToken(String hivemindWsToken) { this.hivemindWsToken = hivemindWsToken; }
+
+    public String getMapUserName() { return mapUserName; }
+    public void setMapUserName(String mapUserName) { this.mapUserName = mapUserName; }
+
+    public String getMapElementPreName() { return mapElementPreName; }
+    public void setMapElementPreName(String mapElementPreName) { this.mapElementPreName = mapElementPreName; }
+
+    public String getMopHost() { return mopHost; }
+    public void setMopHost(String mopHost) { this.mopHost = mopHost; }
+
+    public String getMopToken() { return mopToken; }
+    public void setMopToken(String mopToken) { this.mopToken = mopToken; }
 
     /**
      * 将当前 live + media + location 配置持久化到文件。

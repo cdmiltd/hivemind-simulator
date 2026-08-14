@@ -26,7 +26,7 @@ import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticCode;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
 import ltd.cdmi.hivemind.simulator.diagnostic.ProtocolValidator;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
-import ltd.cdmi.hivemind.simulator.mqtt.TopicConstants;
+import ltd.cdmi.hivemind.simulator.mqtt.DockTopicSchema;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -51,12 +51,14 @@ public class PropertySetHandler {
     private final DiagnosticLogRecorder diagnosticRecorder;
     private final CoverageRecorder coverageRecorder;
     private final RuntimeConfig runtimeConfig;
+    private final DockTopicSchema dockTopicSchema;
 
     public PropertySetHandler(SimulatorProperties props, MqttClientManager mqtt,
                               DeviceState state, ObjectMapper objectMapper,
                               DiagnosticLogRecorder diagnosticRecorder,
                               CoverageRecorder coverageRecorder,
-                              RuntimeConfig runtimeConfig) {
+                              RuntimeConfig runtimeConfig,
+                              DockTopicSchema dockTopicSchema) {
         this.props = props;
         this.mqtt = mqtt;
         this.state = state;
@@ -64,13 +66,14 @@ public class PropertySetHandler {
         this.diagnosticRecorder = diagnosticRecorder;
         this.coverageRecorder = coverageRecorder;
         this.runtimeConfig = runtimeConfig;
+        this.dockTopicSchema = dockTopicSchema;
     }
 
     @PostConstruct
     public void init() {
         String dockSn = runtimeConfig.getDockSn();
-        mqtt.addListener(TopicConstants.topic(TopicConstants.PROPERTY_SET, dockSn), this::handlePropertySet);
-        log.info("PropertySetHandler 已注册监听: {}", TopicConstants.topic(TopicConstants.PROPERTY_SET, dockSn));
+        mqtt.addListener(dockTopicSchema.topic(dockTopicSchema.propertySet(), dockSn), this::handlePropertySet);
+        log.info("PropertySetHandler 已注册监听: {}", dockTopicSchema.topic(dockTopicSchema.propertySet(), dockSn));
 
         // M-2 诊断日志：标量属性 set_reply 格式为推断（DJI 文档示例仅展示 struct 属性）
         String inference = "标量属性 set_reply 格式 {\"属性名\": {\"result\": 0}}：DJI 文档 property/set_reply 示例仅展示 struct 属性"
@@ -133,7 +136,7 @@ public class PropertySetHandler {
             reply.put("timestamp", System.currentTimeMillis());
             reply.put("data", replyData);
 
-            String replyTopic = TopicConstants.topic(TopicConstants.PROPERTY_SET_REPLY, runtimeConfig.getDockSn());
+            String replyTopic = dockTopicSchema.topic(dockTopicSchema.propertySetReply(), runtimeConfig.getDockSn());
             mqtt.publishJson(replyTopic, reply);
             log.info("已回复 property/set_reply: tid={}", tid);
         } catch (Exception e) {

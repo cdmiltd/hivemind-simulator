@@ -4,6 +4,23 @@
 
 ## [Unreleased]
 
+## [v1.1.1] - 2026-08-14
+
+### 新增
+- **Pilot 上云完整实现**：TopicSchema 分层差异化（Pilot/Dock Topic 分离）、DRC 协议策略（RC Pro 走 services / RC Plus 2 走 DRC 通道）、云控授权流程、负载控制统一路由、遥控器 OSD 构建（RC Plus/RC Plus 2/RC Pro）、多机型飞行器 OSD（M400/Mavic 3/M4 系列）、Pilot HTTP/WebSocket 接口模拟（地图元素/态势感知/媒体/航线/MOP）
+- **机场功能扩展**：PSDK 喊话器、ESDK 互联互通、OTA 固件升级、自定义飞行区、AirSense、远程日志、解锁 License 模拟器
+- **WHIP 降级 RTMP 自动推流**：平台下发 `url_type=4`（WebRTC）但 ffmpeg 不支持 WHIP 时，自动将 WebRTC URL 转换为 RTMP URL 推流（ZLM 做 RTMP→WebRTC 转换），无需修改平台配置
+- **航线任务模拟器大幅扩展**：全流程任务模拟（上传/下发/执行/进度/完成）
+
+### 优化
+- **前端架构重构**：index.html 拆分为外壳 + dock-panel.js + pilot-panel.js，DOCK/PILOT 主内容页全面切换，provide/inject 共享上下文
+- Tauri 启动时序优化：`window.show()` 后使用 JS fetch 重试机制加载后端页面，消除启动瞬间 127.0.0.1 无法访问的闪烁
+- NSIS 安装/卸载钩子：使用 `cmd /c taskkill` 替代 PowerShell（避免引号转义问题），确保残留 Java sidecar 进程被终止，避免升级时 `java.dll` 文件占用错误
+
+### 修复
+- **OSD 导出无数据**：前端传所有相关设备 SN（机场/遥控器+飞行器），后端改为按 topic 后缀过滤（不依赖 payload 字段，避免遗漏 Dock 分组上报）
+- DRC 事件推送格式（timestamp 替代 seq）、心跳响应多余 seq 字段
+
 ## [v1.1.0] - 2026-08-13
 
 ### 新增

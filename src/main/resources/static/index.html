@@ -454,6 +454,7 @@
                         </el-radio-group>
                         <el-switch v-model="autoScroll" active-text="自动滚动" size="small"></el-switch>
                         <el-button size="small" @click="clearLogs">清空</el-button>
+                        <el-button size="small" @click="exportOsd">导出OSD</el-button>
                     </div>
                 </div>
                 <div class="log-container" ref="logContainer">
@@ -468,217 +469,10 @@
             </div>
         </div>
 
-        <!-- 右侧：状态模拟 + 直播模拟 + 任务模拟 -->
+        <!-- 右侧：Dock/Pilot 面板（按设备模式分发到独立组件，原内联模板已迁移到 panels/dock-panel.js 和 panels/pilot-panel.js） -->
         <div class="right-panel">
-            <!-- 状态模拟 -->
-            <el-card class="right-card" header="状态模拟">
-                <el-form label-width="72px" size="small">
-                    <!-- Pilot 模式：遥控器电量 -->
-                    <el-form-item v-if="connConfig.device_mode === 'PILOT'" label="遥控电量">
-                        <el-slider v-model="editState.controllerCapacity" :min="0" :max="100" @change="saveState"></el-slider>
-                    </el-form-item>
-                    <!-- Dock 模式：机场状态控制 -->
-                    <template v-else>
-                        <el-form-item label="电量(%)">
-                            <el-slider v-model="editState.batteryPercent" :min="0" :max="100" @change="saveState"></el-slider>
-                        </el-form-item>
-                        <el-form-item label="温度(℃)">
-                            <el-input-number v-model="editState.dockTemperature" :precision="1" :step="0.5" size="small" @change="saveState"></el-input-number>
-                        </el-form-item>
-                        <el-form-item label="湿度(%)">
-                            <el-input-number v-model="editState.dockHumidity" :min="0" :max="100" :step="1" size="small" @change="saveState"></el-input-number>
-                        </el-form-item>
-                        <el-form-item label="风速(m/s)">
-                            <el-input-number v-model="editState.windSpeed" :min="0" :step="0.5" size="small" @change="saveState"></el-input-number>
-                        </el-form-item>
-                        <el-form-item label="舱盖">
-                            <el-switch v-model="editState.coverOpen" @change="saveState"></el-switch>
-                        </el-form-item>
-                        <el-form-item label="飞行器">
-                            <el-switch v-model="editState.droneInDock" @change="saveState"></el-switch>
-                            <span style="margin-left: 4px; font-size: 12px; color: #909399;">{{ editState.droneInDock ? '在舱' : '不在舱' }}</span>
-                            <el-radio-group v-model="editState.droneActivated" size="small" :disabled="!editState.droneInDock" @change="saveState" style="margin-left: 12px;">
-                                <el-radio-button :value="false">休眠</el-radio-button>
-                                <el-radio-button :value="true">激活</el-radio-button>
-                            </el-radio-group>
-                        </el-form-item>
-                        <el-form-item v-if="connConfig.dock_type === 'DOCK1' || connConfig.dock_type === 'DOCK2'" label="静音模式">
-                            <el-switch v-model="editState.silentMode" :active-value="1" :inactive-value="0" @change="saveState"></el-switch>
-                        </el-form-item>
-                    </template>
-                </el-form>
-            </el-card>
-
-            <!-- 异常模拟（HMS 告警上报）— Pilot 模式不支持 HMS -->
-            <el-card class="right-card" v-if="connConfig.device_mode === 'DOCK'">
-                <template #header>
-                    <span>异常模拟</span>
-                    <el-tag v-if="hmsReporting" type="warning" size="small" style="margin-left: 8px;">上报中</el-tag>
-                </template>
-                <el-checkbox-group v-model="hmsSelected" size="small">
-                    <div v-for="opt in hmsOptions" :key="opt.value" style="margin-bottom: 6px;">
-                        <el-checkbox :label="opt.value">{{ opt.label }}</el-checkbox>
-                    </div>
-                </el-checkbox-group>
-                <div style="margin-top: 12px;">
-                    <el-button type="warning" size="small" :disabled="!canReportHms" :loading="hmsReporting" @click="triggerHms">上报 HMS</el-button>
-                    <span v-if="!mqttConnected" style="margin-left: 8px; font-size: 12px; color: #909399;">需先连接 MQTT</span>
-                </div>
-            </el-card>
-
-            <!-- 直播模拟 -->
-            <el-card class="right-card">
-                <template #header>
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span>直播模拟</span>
-                        <el-button size="small" text @click="refreshLiveCapability">重新检测</el-button>
-                    </div>
-                </template>
-                <!-- 推流能力状态 -->
-                <div v-if="liveCapability" style="margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed #e4e7ed;">
-                    <div style="display: flex; align-items: center; gap: 6px; margin-bottom: 6px;">
-                        <span style="font-size: 13px; color: #606266;">推流能力:</span>
-                        <el-tag v-if="liveCapability.whipSupported && liveCapability.rtmpSupported" type="success" size="small">完整 (RTMP+WHIP)</el-tag>
-                        <el-tag v-else-if="liveCapability.rtmpSupported" type="success" size="small">RTMP</el-tag>
-                        <el-tag v-else-if="liveCapability.whipSupported" type="success" size="small">WHIP</el-tag>
-                        <el-tag v-else type="warning" size="small">受限</el-tag>
-                        <span v-if="liveCapability.activePushCount > 0" style="font-size: 12px; color: #909399;">（{{ liveCapability.activePushCount }} 路推流中）</span>
-                        <el-button size="small" text type="primary" @click="openLiveConfigDialog" style="margin-left: auto;">配置</el-button>
-                    </div>
-                    <!-- 限制清单 -->
-                    <div v-if="liveCapability.limitations && liveCapability.limitations.length > 0">
-                        <div v-for="(lim, i) in liveCapability.limitations" :key="i" style="background: #fdf6ec; border: 1px solid #f5dab1; border-radius: 4px; padding: 8px; margin-bottom: 6px; font-size: 12px;">
-                            <div style="font-weight: bold; color: #e6a23c;">
-                                <span v-if="lim.code !== 'CONFIG'" style="margin-right: 4px;">[{{ lim.code }}]</span>{{ lim.title }}
-                            </div>
-                            <div style="color: #606266; margin-top: 4px;"><b>原因:</b> {{ lim.reason }}</div>
-                            <div style="color: #606266; margin-top: 2px;"><b>操作:</b> {{ lim.action }}</div>
-                            <div style="color: #67c23a; margin-top: 2px;"><b>突破后:</b> {{ lim.afterFix }}</div>
-                        </div>
-                    </div>
-                    <!-- 已有资源（完整时展示） -->
-                    <div v-else style="font-size: 12px; color: #67c23a;">
-                        ffmpeg: {{ liveCapability.ffmpegPath }} {{ liveCapability.whipSupported ? '(支持WHIP)' : '' }}<br>
-                        视频目录: {{ liveCapability.videoDir || '-' }}<br>
-                        <span v-if="liveCapability.videosFound && liveCapability.videosFound.length > 0">已有视频: {{ liveCapability.videosFound.join(', ') }}</span>
-                    </div>
-                </div>
-                <!-- 活跃推流列表 -->
-                <div v-if="streams.length === 0" style="color: #909399; font-size: 13px;">无活跃推流</div>
-                <div v-for="s in streams" :key="s.video_id" style="margin-bottom: 8px; font-size: 13px;">
-                    <el-tag type="success" size="small">推流中</el-tag>
-                    <div style="margin-top: 4px;">videoId: {{ s.video_id }}</div>
-                    <div>清晰度: {{ ['自适应','流畅','标清','高清','超清'][s.quality] }}</div>
-                </div>
-            </el-card>
-
-            <!-- 任务模拟 — Pilot 模式不支持航线任务和媒体上传（TC-PILOT-017/018） -->
-            <el-card class="right-card">
-                <template #header>任务模拟</template>
-                <template v-if="connConfig.device_mode === 'DOCK'">
-                    <el-descriptions :column="1" border size="small">
-                        <el-descriptions-item label="任务状态">
-                            <el-tag :type="task.active ? 'warning' : 'info'" size="small">
-                                {{ task.active ? (task.paused ? '暂停' : '执行中') : '空闲' }}
-                            </el-tag>
-                        </el-descriptions-item>
-                        <el-descriptions-item label="Flight ID">{{ task.flight_id || '-' }}</el-descriptions-item>
-                        <el-descriptions-item label="进度">{{ task.percent || 0 }}%</el-descriptions-item>
-                        <el-descriptions-item label="步骤">{{ task.current_step || '-' }} / 35</el-descriptions-item>
-                    </el-descriptions>
-                    <el-progress :percentage="task.percent || 0" :status="task.active ? undefined : 'success'" style="margin-top: 8px;"></el-progress>
-                    <div style="margin-top: 8px;">
-                        <div style="font-size: 12px; color: #909399; margin-bottom: 4px;">媒体文件 ({{ media.length }})</div>
-                        <div v-for="f in media.slice(-5)" :key="f.name" style="font-size: 12px; color: #606266;">
-                            {{ f.name }} - {{ f.upload_time }}
-                        </div>
-                    </div>
-                </template>
-                <div v-else style="padding: 8px 0; font-size: 13px; color: #909399; line-height: 1.6;">
-                    Pilot 模式不模拟航线任务和媒体上传。<br>
-                    Pilot 航线执行与媒体管理通过 HTTPS，由 Pilot 2 本地控制。
-                </div>
-            </el-card>
-
-            <!-- 位置模拟 — Dock: 机场位置(起飞点=返航点)；Pilot: 遥控器位置(=返航点 Home) -->
-            <el-card class="right-card">
-                <template #header>
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <div style="display: flex; align-items: center; gap: 8px;">
-                            <span>位置模拟</span>
-                            <el-radio-group v-model="mapMode" size="small" @change="onMapModeChange">
-                                <el-radio-button value="map" :disabled="!amapKeyApplied">地图</el-radio-button>
-                                <el-radio-button value="manual">手动</el-radio-button>
-                            </el-radio-group>
-                            <el-button size="small" text @click="showAmapConfigDialog = true">配置</el-button>
-                        </div>
-                        <el-button v-if="mapMode === 'manual'" size="small" type="primary" @click="saveLocation">保存</el-button>
-                    </div>
-                </template>
-                <!-- 地图模式 -->
-                <div v-if="mapMode === 'map'">
-                    <!-- 地址搜索 + 选点按钮 -->
-                    <div style="display: flex; gap: 4px; margin-bottom: 4px;">
-                        <el-autocomplete
-                            v-model="addressSearch"
-                            :fetch-suggestions="fetchAddressSuggestions"
-                            placeholder="输入地址搜索"
-                            size="small"
-                            clearable
-                            value-key="value"
-                            style="flex: 1;"
-                            @select="onAddressSelect"
-                        ></el-autocomplete>
-                        <el-button size="small" :type="selectingAirport ? 'warning' : 'default'" @click="startSelectAirport">
-                            {{ selectingAirport ? '点击地图' : '选点' }}
-                        </el-button>
-                        <el-button v-if="selectingAirport" size="small" @click="cancelSelectAirport">取消</el-button>
-                    </div>
-                    <!-- 地图容器 -->
-                    <div id="mapContainer" style="width: 100%; height: 240px; border: 1px solid #e4e7ed; border-radius: 4px;"></div>
-                </div>
-                <!-- 手动模式 -->
-                <div v-if="mapMode === 'manual'">
-                    <!-- 未配置 Key 时提示 -->
-                    <div v-if="!amapKeyApplied" style="margin-bottom: 8px; padding: 8px; background: #f5f7fa; border-radius: 4px; font-size: 12px; color: #909399;">
-                        点击「配置」按钮申请并填写高德地图 Key，可切换到地图模式
-                    </div>
-                    <!-- 经纬度+高度输入 -->
-                    <el-form label-width="60px" size="small">
-                        <el-form-item label="纬度">
-                            <el-input-number v-model="locationEdit.latitude" :precision="6" :step="0.000001" :controls="false" style="width: 100%;"></el-input-number>
-                        </el-form-item>
-                        <el-form-item label="经度">
-                            <el-input-number v-model="locationEdit.longitude" :precision="6" :step="0.000001" :controls="false" style="width: 100%;"></el-input-number>
-                        </el-form-item>
-                        <el-form-item label="高度(m)">
-                            <el-input-number v-model="locationEdit.height" :precision="1" :step="0.1" :controls="false" style="width: 100%;"></el-input-number>
-                        </el-form-item>
-                    </el-form>
-                </div>
-                <div style="font-size: 12px; color: #909399; margin-top: 4px;">
-                    {{ connConfig.device_mode === 'PILOT' ? '遥控器位置作为飞行器返航点（Home 点），保存后重启依然有效。' : '机场位置作为起飞点与返航点，保存后重启依然有效。' }}
-                </div>
-
-                <!-- 无人机实时位置（Dock/Pilot 通用） -->
-                <div style="margin-top: 12px; padding-top: 10px; border-top: 1px dashed #e4e7ed;">
-                    <div style="font-size: 13px; color: #303133; margin-bottom: 6px;">无人机位置</div>
-                    <el-descriptions :column="1" border size="small">
-                        <el-descriptions-item label="纬度">{{ dronePosition.activated ? dronePosition.latitude.toFixed(6) : '-' }}</el-descriptions-item>
-                        <el-descriptions-item label="经度">{{ dronePosition.activated ? dronePosition.longitude.toFixed(6) : '-' }}</el-descriptions-item>
-                        <el-descriptions-item label="高度(m)">{{ dronePosition.activated ? dronePosition.height.toFixed(1) : '-' }}</el-descriptions-item>
-                        <el-descriptions-item label="状态">{{ droneStatusLabel }}</el-descriptions-item>
-                    </el-descriptions>
-                    <div style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
-                        <el-button size="small" type="warning" :disabled="!canTriggerRcLost" @click="triggerRcLost">模拟失联</el-button>
-                        <el-select size="small" v-model="dronePosition.rc_lost_action" style="width: 110px;" @change="saveRcLostAction">
-                            <el-option label="悬停" :value="0"></el-option>
-                            <el-option label="降落" :value="1"></el-option>
-                            <el-option label="返航" :value="2"></el-option>
-                        </el-select>
-                    </div>
-                </div>
-            </el-card>
+            <dock-panel v-if="connConfig.device_mode === 'DOCK'"></dock-panel>
+            <pilot-panel v-else></pilot-panel>
         </div>
     </div>
 
@@ -765,7 +559,7 @@
             <template v-if="connConfig.device_mode === 'PILOT'">
                 <el-descriptions-item label="遥控器 SN">{{ deviceInfo.controllerSn || '-' }}</el-descriptions-item>
                 <el-descriptions-item label="Drone SN">{{ deviceInfo.droneSn || '-' }}</el-descriptions-item>
-                <el-descriptions-item label="遥控器型号">{{ deviceInfo.controllerModelKey || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="遥控器型号">{{ deviceInfo.controllerModelKey ? controllerModelName(deviceInfo.controllerModelKey) + ' (' + deviceInfo.controllerModelKey + ')' : '-' }}</el-descriptions-item>
                 <el-descriptions-item label="无人机型号">{{ deviceInfo.droneModelKey ? droneModelName(deviceInfo.droneModelKey) + ' (' + deviceInfo.droneModelKey + ')' : '-' }}</el-descriptions-item>
             </template>
             <template v-else>
@@ -883,7 +677,7 @@
                 <div style="font-size: 13px; color: #606266; line-height: 1.8;">
                     <p style="margin: 4px 0;"><b>两种推流协议：</b></p>
                     <ul style="margin: 4px 0 4px 20px;">
-                        <li><b>RTMP</b>（url_type=0）：普通 ffmpeg 即支持，安装简单，第三方平台可转 WebRTC</li>
+                        <li><b>RTMP</b>（url_type=1）：普通 ffmpeg 即支持，安装简单，第三方平台可转 WebRTC</li>
                         <li><b>WebRTC/WHIP</b>（url_type=4）：需 ffmpeg ≥8.0 且 <code>--enable-muxer=whip</code> 编译，安装复杂</li>
                     </ul>
                     <p style="margin: 4px 0;"><b>RTMP 推流（推荐，足够验证完整链路）：</b></p>
@@ -1015,10 +809,12 @@
 
 <script src="/vendor/vue/vue.global.prod.js"></script>
 <script src="/vendor/element-plus/index.full.min.js"></script>
+<script src="/panels/dock-panel.js"></script>
+<script src="/panels/pilot-panel.js"></script>
 <script>
-const { createApp, ref, reactive, computed, onMounted, onUnmounted, nextTick } = Vue;
+const { createApp, ref, reactive, computed, onMounted, onUnmounted, nextTick, watch, provide, inject } = Vue;
 
-createApp({
+const app = createApp({
     setup() {
         const mqttConnected = ref(false);
         const online = ref(false);
@@ -1086,20 +882,6 @@ createApp({
         const coverageHosts = ref([]);
         const coverageSelectedHost = ref('');
         const coverageData = ref(null);
-
-        // 异常模拟（HMS 上报）
-        // 选项 value 与后端 HmsSimulator.AlarmType 枚举常量名一致（小写）
-        const hmsOptions = [
-            { value: 'wind_high',       label: '风速过大（≥9 m/s）' },
-            { value: 'rain_heavy',      label: '雨量过大' },
-            { value: 'signal_weak',     label: '图传信号弱' },
-            { value: 'signal_lost',     label: '图传信号丢失' },
-            { value: 'altitude_limit',  label: '高度超限' },
-            { value: 'distance_limit',  label: '距离超限（限远）' },
-            { value: 'battery_low',     label: '电池电量低（严重低电量）' },
-        ];
-        const hmsSelected = ref([]);
-        const hmsReporting = ref(false);
 
         // 平台连接配置
         const connConfig = reactive({
@@ -1411,6 +1193,17 @@ createApp({
             const parts = (modelKey || '').split('-');
             const key = parts.length >= 3 ? (parts[1] + '-' + parts[2]) : '';
             return names[key] || ('Drone-' + (parts[1] || '0'));
+        }
+        function controllerModelName(modelKey) {
+            // 按 type 字段映射，参考 DJI 产品支持文档
+            // https://developer.dji.com/doc/cloud-api-tutorial/cn/overview/product-support.html
+            const names = {
+                119: 'DJI RC Plus',
+                144: 'DJI RC Pro 行业版',
+                174: 'DJI RC Plus 2'
+            };
+            const type = parseInt((modelKey || '').split('-')[1]) || 0;
+            return names[type] || ('RC-' + type);
         }
 
         async function refreshLogs() {
@@ -2085,29 +1878,15 @@ createApp({
             await refreshLogs();
         }
 
-        // HMS 异常模拟上报
-        const canReportHms = computed(() =>
-            mqttConnected.value && hmsSelected.value.length > 0 && !hmsReporting.value
-        );
-
-        async function triggerHms() {
-            if (!canReportHms.value) return;
-            hmsReporting.value = true;
-            const data = await fetchJSON('/api/hms/trigger', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ types: hmsSelected.value })
-            });
-            hmsReporting.value = false;
-            if (data) {
-                if (data.success) {
-                    ElementPlus.ElMessage.success('HMS 已上报：' + (data.count || 0) + ' 条告警');
-                } else {
-                    ElementPlus.ElMessage.error(data.message || 'HMS 上报失败');
-                }
-                // 上报后立即刷新日志，便于查看实际发出的报文
-                await refreshLogs();
-            }
+        // 导出 OSD 日志数据（新窗口打开 JSON，替代外部 PowerShell 脚本）
+        function exportOsd() {
+            const info = deviceInfo.value;
+            // 传所有相关设备 SN（机场/遥控器 + 飞行器），后端按 topic 匹配，OSD topic 因设备而异
+            const sns = [info.dockSn, info.controllerSn, info.droneSn]
+                .filter(sn => sn && sn.trim())
+                .filter((sn, i, arr) => arr.indexOf(sn) === i);
+            if (sns.length === 0) { ElMessage.warning('设备 SN 未获取，请先注册上线'); return; }
+            window.open(`/api/logs/osd-export?sn=${encodeURIComponent(sns.join(','))}&direction=send`, '_blank');
         }
 
         const filteredLogs = computed(() => {
@@ -2123,6 +1902,7 @@ createApp({
         });
 
         async function pollAll() {
+            // Dock 专属轮询（loadPsdkState/loadEsdkState）已迁移到 dock-panel.js 的 onMounted
             await Promise.all([refreshConnection(), refreshState(), refreshTask(), refreshStreams(), refreshMedia(), refreshLogs(), refreshDronePosition()]);
         }
 
@@ -2157,15 +1937,53 @@ createApp({
             }
         });
 
+        // 共享上下文：供 dock-panel / pilot-panel 子组件 inject 使用
+        // 传递 ref/reactive 对象引用，子组件 inject 后响应性保持
+        provide('ctx', {
+            // 共享状态
+            mqttConnected, online, state, editState, task, streams, liveCapability, media, logs,
+            connConfig, connecting, powered, mqttError, deviceInfo, licenseLocked,
+            locationEdit, dronePosition,
+            // 日志相关
+            logFilter, autoScroll, logContainer, topicFilter, topicOptions, filteredLogs,
+            showMsgDrawer, currentMessage, formattedPayload, payloadTruncated,
+            // 弹窗开关
+            showRegisterDialog, showDeviceInfoDialog, showDiagnosticDialog, showCoverageDialog,
+            showLiveConfigDialog, showAmapConfigDialog,
+            // 直播配置
+            liveConfigEdit, mediaDirValue, liveConfigSaveResult, installingFfmpeg, installProgress, installElapsed,
+            // 诊断/覆盖率
+            diagnosticLogs, diagnosticFilter, filteredDiagnosticLogs,
+            coverageHosts, coverageSelectedHost, coverageData,
+            // 地图
+            amapKey, amapSecurityCode, mapMode, amapKeyApplied, selectingAirport, addressSearch,
+            // 共享方法
+            fetchJSON, refreshState, refreshLogs, refreshTask, refreshStreams, refreshMedia, refreshDeviceInfo, refreshConnection,
+            saveConnConfig, loadConnConfig, refreshConfig,
+            registerToPlatform, doRegister, doPowerOn, doPowerOff, saveState, clearLogs, exportOsd,
+            loadLiveCapability, refreshLiveCapability, openLiveConfigDialog, saveLiveConfig, installFfmpeg,
+            saveLocation, loadLocation, saveRcLostAction, triggerRcLost,
+            saveAmapKey, clearAmapKey, onMapModeChange, initAmap, createMap, setAirportLocation,
+            fetchAddressSuggestions, onAddressSelect, updateAirportMarker, updateAirportInfoWindow,
+            startSelectAirport, cancelSelectAirport, onMapClickSelectAirport, fetchElevation, updateDroneMarker, refreshDronePosition,
+            loadDiagnosticLogs, openCoverageDialog, loadCoverageHosts, loadCoverageData, downloadCoverageReport,
+            openMessageDetail, copyPayload,
+            // 工具函数和选项
+            dockModelName, droneModelName, controllerModelName,
+            dockTypeOptions, droneTypeOptions, controllerTypeOptions, pilotDroneTypeOptions,
+            onDockTypeChange, onControllerTypeChange, onDeviceModeChange,
+            droneStatusLabel, canTriggerRcLost, coverageRateText,
+        });
+
+        // 外壳模板（标题栏/日志区/公共弹窗）需要的共享项；Dock 专属项已迁移到 dock-panel.js
         return { mqttConnected, online, powered, mqttError, state, editState, task, streams, media, logs,
                  connConfig, connecting, deviceInfo, showRegisterDialog, licenseLocked, showDeviceInfoDialog,
                  logFilter, autoScroll, logContainer, topicFilter, topicOptions,
                  filteredLogs,
                  showMsgDrawer, currentMessage, formattedPayload, payloadTruncated,
                  openMessageDetail, copyPayload,
-                 hmsOptions, hmsSelected, hmsReporting, canReportHms, triggerHms,
-                 doRegister, doPowerOn, doPowerOff, saveState, clearLogs,
-                 dockModelName, droneModelName,
+                 doRegister, doPowerOn, doPowerOff, saveState, clearLogs, exportOsd,
+                 dockModelName, droneModelName, controllerModelName,
                  dockTypeOptions, droneTypeOptions, onDockTypeChange,
                  controllerTypeOptions, pilotDroneTypeOptions, onControllerTypeChange, onDeviceModeChange,
                  showDiagnosticDialog, diagnosticLogs, diagnosticFilter, filteredDiagnosticLogs, loadDiagnosticLogs,
@@ -2181,7 +1999,12 @@ createApp({
                  selectingAirport, startSelectAirport, cancelSelectAirport,
                  addressSearch, fetchAddressSuggestions, onAddressSelect };
     }
-}).use(ElementPlus).mount('#app');
+});
+app.use(ElementPlus);
+// 注册 Dock/Pilot 面板组件（CDN 方式，无构建链）
+registerDockPanel(app);
+registerPilotPanel(app);
+app.mount('#app');
 // Vue 挂载完成，移除加载占位
 document.getElementById('app-loading')?.remove();
 </script>

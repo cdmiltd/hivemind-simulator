@@ -26,6 +26,7 @@ import ltd.cdmi.hivemind.simulator.device.DeviceType;
 import ltd.cdmi.hivemind.simulator.diagnostic.CoverageRecorder;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
 import ltd.cdmi.hivemind.simulator.handler.PropertySetHandler;
+import ltd.cdmi.hivemind.simulator.mqtt.DockTopicSchema;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager.MqttMessageListener;
 import org.junit.jupiter.api.Test;
@@ -47,8 +48,11 @@ class PropertySetHandlerTest {
         return new SimulatorProperties(
                 new SimulatorProperties.Location(30.67, 104.07, 500.0),
                 new SimulatorProperties.Log(2000),
-                new SimulatorProperties.Live(false, "", ""),
-                new SimulatorProperties.Media(""));
+                new SimulatorProperties.Live(false, "", "", null),
+                new SimulatorProperties.Media("", false, 0, false, 0),
+                null,
+                null,
+                null);
     }
 
     private RuntimeConfig testRuntimeConfig() {
@@ -73,7 +77,7 @@ class PropertySetHandlerTest {
         rc.setDockType(dockType);
 
         PropertySetHandler handler = new PropertySetHandler(
-                testProps(), mqtt, state, objectMapper, diag, cov, rc);
+                testProps(), mqtt, state, objectMapper, diag, cov, rc, new DockTopicSchema());
         handler.init();
 
         // 捕获 addListener 注册的回调

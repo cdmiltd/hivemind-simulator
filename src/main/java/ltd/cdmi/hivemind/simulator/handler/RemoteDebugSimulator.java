@@ -20,8 +20,8 @@ import jakarta.annotation.PreDestroy;
 import ltd.cdmi.hivemind.simulator.config.RuntimeConfig;
 import ltd.cdmi.hivemind.simulator.device.DeviceState;
 import ltd.cdmi.hivemind.simulator.device.DeviceType;
+import ltd.cdmi.hivemind.simulator.mqtt.DockTopicSchema;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
-import ltd.cdmi.hivemind.simulator.mqtt.TopicConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -167,13 +167,16 @@ public class RemoteDebugSimulator {
     private final MqttClientManager mqtt;
     private final DeviceState state;
     private final RuntimeConfig runtimeConfig;
+    private final DockTopicSchema dockTopicSchema;
     private final ScheduledExecutorService scheduler;
 
     public RemoteDebugSimulator(MqttClientManager mqtt,
-                                 DeviceState state, RuntimeConfig runtimeConfig) {
+                                 DeviceState state, RuntimeConfig runtimeConfig,
+                                 DockTopicSchema dockTopicSchema) {
         this.mqtt = mqtt;
         this.state = state;
         this.runtimeConfig = runtimeConfig;
+        this.dockTopicSchema = dockTopicSchema;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "remote-debug-scheduler");
             t.setDaemon(true);
@@ -309,7 +312,7 @@ public class RemoteDebugSimulator {
             envelope.put("gateway", runtimeConfig.getDockSn());
             envelope.put("method", method);
 
-            String topic = TopicConstants.topic(TopicConstants.EVENTS, runtimeConfig.getDockSn());
+            String topic = dockTopicSchema.topic(dockTopicSchema.events(), runtimeConfig.getDockSn());
             mqtt.publishJson(topic, envelope);
             log.info("远程调试进度事件: method={}, bid={}, status={}, percent={}", method, bid, status, percent);
         } catch (Exception e) {

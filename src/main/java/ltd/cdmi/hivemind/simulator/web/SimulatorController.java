@@ -28,20 +28,37 @@ import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
 import ltd.cdmi.hivemind.simulator.handler.FfmpegWhipPusher;
 import ltd.cdmi.hivemind.simulator.handler.FfmpegInstaller;
 import ltd.cdmi.hivemind.simulator.handler.FlightCommandSimulator;
+import ltd.cdmi.hivemind.simulator.handler.AirSenseSimulator;
+import ltd.cdmi.hivemind.simulator.handler.FlightAreaSimulator;
+import ltd.cdmi.hivemind.simulator.handler.PsdkSimulator;
+import ltd.cdmi.hivemind.simulator.handler.EsdkSimulator;
+import ltd.cdmi.hivemind.simulator.handler.RemoteLogSimulator;
+import ltd.cdmi.hivemind.simulator.handler.OtaSimulator;
+import ltd.cdmi.hivemind.simulator.handler.UnlockLicenseSimulator;
 import ltd.cdmi.hivemind.simulator.handler.HmsSimulator;
 import ltd.cdmi.hivemind.simulator.handler.LiveStreamSimulator;
 import ltd.cdmi.hivemind.simulator.handler.MediaUploadSimulator;
 import ltd.cdmi.hivemind.simulator.handler.WaylineTaskSimulator;
+import ltd.cdmi.hivemind.simulator.handler.MapElementSimulator;
+import ltd.cdmi.hivemind.simulator.handler.SituationAwarenessSimulator;
+import ltd.cdmi.hivemind.simulator.handler.PilotHttpSimulator;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
+import ltd.cdmi.hivemind.simulator.ws.MopClient;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.http.MediaType;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import lombok.extern.slf4j.Slf4j;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * 模拟器 REST API，供 Web 控制台调用。
@@ -59,6 +76,13 @@ public class SimulatorController {
     private final LiveStreamSimulator liveSimulator;
     private final MediaUploadSimulator mediaSimulator;
     private final HmsSimulator hmsSimulator;
+    private final AirSenseSimulator airSenseSimulator;
+    private final FlightAreaSimulator flightAreaSimulator;
+    private final UnlockLicenseSimulator unlockLicenseSimulator;
+    private final PsdkSimulator psdkSimulator;
+    private final EsdkSimulator esdkSimulator;
+    private final RemoteLogSimulator remoteLogSimulator;
+    private final OtaSimulator otaSimulator;
     private final FlightCommandSimulator flightCommandSimulator;
     private final FfmpegWhipPusher ffmpegPusher;
     private final FfmpegInstaller ffmpegInstaller;
@@ -66,16 +90,33 @@ public class SimulatorController {
     private final SimulatorProperties props;
     private final DiagnosticLogRecorder diagnosticRecorder;
     private final CoverageRecorder coverageRecorder;
+    private final ObjectMapper objectMapper;
+    private final MapElementSimulator mapElementSimulator;
+    private final SituationAwarenessSimulator situationAwarenessSimulator;
+    private final PilotHttpSimulator pilotHttpSimulator;
+    private final MopClient mopClient;
 
     public SimulatorController(DockOnlineService onlineService, PilotOnlineService pilotOnlineService,
                                DeviceState state,
                                MqttClientManager mqtt, WaylineTaskSimulator waylineSimulator,
                                LiveStreamSimulator liveSimulator, MediaUploadSimulator mediaSimulator,
-                               HmsSimulator hmsSimulator, FlightCommandSimulator flightCommandSimulator,
+                               HmsSimulator hmsSimulator, AirSenseSimulator airSenseSimulator,
+                               FlightAreaSimulator flightAreaSimulator,
+                               UnlockLicenseSimulator unlockLicenseSimulator,
+                               PsdkSimulator psdkSimulator,
+                               EsdkSimulator esdkSimulator,
+                               RemoteLogSimulator remoteLogSimulator,
+                               OtaSimulator otaSimulator,
+                               FlightCommandSimulator flightCommandSimulator,
                                FfmpegWhipPusher ffmpegPusher, FfmpegInstaller ffmpegInstaller,
                                RuntimeConfig runtimeConfig, SimulatorProperties props,
                                DiagnosticLogRecorder diagnosticRecorder,
-                               CoverageRecorder coverageRecorder) {
+                               CoverageRecorder coverageRecorder,
+                               ObjectMapper objectMapper,
+                               MapElementSimulator mapElementSimulator,
+                               SituationAwarenessSimulator situationAwarenessSimulator,
+                               PilotHttpSimulator pilotHttpSimulator,
+                               MopClient mopClient) {
         this.onlineService = onlineService;
         this.pilotOnlineService = pilotOnlineService;
         this.state = state;
@@ -84,6 +125,13 @@ public class SimulatorController {
         this.liveSimulator = liveSimulator;
         this.mediaSimulator = mediaSimulator;
         this.hmsSimulator = hmsSimulator;
+        this.airSenseSimulator = airSenseSimulator;
+        this.flightAreaSimulator = flightAreaSimulator;
+        this.unlockLicenseSimulator = unlockLicenseSimulator;
+        this.psdkSimulator = psdkSimulator;
+        this.esdkSimulator = esdkSimulator;
+        this.remoteLogSimulator = remoteLogSimulator;
+        this.otaSimulator = otaSimulator;
         this.flightCommandSimulator = flightCommandSimulator;
         this.ffmpegPusher = ffmpegPusher;
         this.ffmpegInstaller = ffmpegInstaller;
@@ -91,6 +139,11 @@ public class SimulatorController {
         this.props = props;
         this.diagnosticRecorder = diagnosticRecorder;
         this.coverageRecorder = coverageRecorder;
+        this.objectMapper = objectMapper;
+        this.mapElementSimulator = mapElementSimulator;
+        this.situationAwarenessSimulator = situationAwarenessSimulator;
+        this.pilotHttpSimulator = pilotHttpSimulator;
+        this.mopClient = mopClient;
     }
 
     // ==================== 设备控制 ====================
@@ -280,6 +333,135 @@ public class SimulatorController {
     @GetMapping("/task")
     public Map<String, Object> getTaskStatus() {
         return waylineSimulator.getTaskStatus();
+    }
+
+    /**
+     * 手动触发 flighttask_ready 事件（任务就绪通知）。
+     * <p>请求体：{"flight_ids": ["task-id-1", "task-id-2"]}</p>
+     */
+    @PostMapping("/flighttask-ready")
+    public Map<String, Object> publishFlighttaskReady(@RequestBody Map<String, Object> body) {
+        @SuppressWarnings("unchecked")
+        List<String> flightIds = (List<String>) body.getOrDefault("flight_ids", List.of());
+        waylineSimulator.publishFlighttaskReady(flightIds);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("flight_ids", flightIds);
+        return result;
+    }
+
+    /**
+     * 手动触发 device_exit_homing_notify 事件（设备返航退出状态通知）。
+     * <p>请求体：{"action": 1, "reason": 0}</p>
+     */
+    @PostMapping("/device-exit-homing-notify")
+    public Map<String, Object> publishDeviceExitHomingNotify(@RequestBody Map<String, Object> body) {
+        int action = ((Number) body.getOrDefault("action", 1)).intValue();
+        int reason = ((Number) body.getOrDefault("reason", 0)).intValue();
+        waylineSimulator.publishDeviceExitHomingNotify(action, reason);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("action", action);
+        result.put("reason", reason);
+        return result;
+    }
+
+    /**
+     * 手动触发 flight_setup_exception_notify 事件（机场任务准备异常通知，仅 Dock1）。
+     * <p>请求体：{"flight_id": "可选，为空则用当前任务", "timeout_time": 6, "flight_type": 1}</p>
+     * <p>timeout_time：异常超时时间（分钟，合法值 2/4/6/8/10）；flight_type：1=航线任务，2=指令飞行任务</p>
+     */
+    @PostMapping("/flight-setup-exception-notify")
+    public Map<String, Object> publishFlightSetupExceptionNotify(@RequestBody Map<String, Object> body) {
+        String flightId = body.get("flight_id") == null ? null : String.valueOf(body.get("flight_id"));
+        int timeoutTime = ((Number) body.getOrDefault("timeout_time", 6)).intValue();
+        int flightType = ((Number) body.getOrDefault("flight_type", 1)).intValue();
+        boolean sent = waylineSimulator.publishFlightSetupExceptionNotify(flightId, timeoutTime, flightType);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", sent);
+        if (!sent) {
+            result.put("message", "当前 Dock 类型不支持 flight_setup_exception_notify（仅 Dock1 支持）");
+        }
+        result.put("timeout_time", timeoutTime);
+        result.put("flight_type", flightType);
+        return result;
+    }
+
+    /**
+     * 手动触发 in_flight_wayline_progress 事件（空中下发航线状态上报）。
+     * <p>请求体：{"in_flight_wayline_id": "xxx", "percent": 50, "status": 3, "result": 0, "way_point_index": 2}</p>
+     */
+    @PostMapping("/in-flight-wayline-progress")
+    public Map<String, Object> publishInFlightWaylineProgress(@RequestBody Map<String, Object> body) {
+        String waylineId = (String) body.getOrDefault("in_flight_wayline_id", "");
+        int percent = ((Number) body.getOrDefault("percent", 0)).intValue();
+        int status = ((Number) body.getOrDefault("status", 0)).intValue();
+        int result_code = ((Number) body.getOrDefault("result", 0)).intValue();
+        int wayPointIndex = ((Number) body.getOrDefault("way_point_index", 0)).intValue();
+        waylineSimulator.publishInFlightWaylineProgress(waylineId, percent, status, result_code, wayPointIndex);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        return result;
+    }
+
+    /**
+     * 发送 flighttask_progress_get 请求（蛙跳任务中查询另一机场的任务状态）。
+     * <p>请求体：{"sn": "目标设备SN", "flight_id": "航线任务ID（Dock2 必填）"}
+     * <p>按当前 Dock 类型发送对应字段：Dock2 → target_sn + flight_id，Dock3 → sn。</p>
+     * <p>回复：平台的 requests_reply，超时返回 success=false</p>
+     */
+    @PostMapping("/flighttask-progress-get")
+    public Map<String, Object> publishFlighttaskProgressGet(@RequestBody Map<String, Object> body) {
+        String sn = (String) body.getOrDefault("sn", "");
+        String flightId = (String) body.getOrDefault("flight_id", "");
+        JsonNode reply = waylineSimulator.publishFlighttaskProgressGet(sn, flightId);
+        if (reply == null) {
+            return Map.of("success", false, "message", "平台未回复（超时）");
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("reply", reply);
+        return result;
+    }
+
+    /**
+     * 发送 flighttask_resource_get 请求（获取任务航线文件资源）。
+     * <p>请求体：{"flight_id": "任务ID"}</p>
+     * <p>回复：平台的 requests_reply，超时返回 success=false</p>
+     */
+    @PostMapping("/flighttask-resource-get")
+    public Map<String, Object> publishFlighttaskResourceGet(@RequestBody Map<String, Object> body) {
+        String flightId = (String) body.getOrDefault("flight_id", "");
+        JsonNode reply = waylineSimulator.publishFlighttaskResourceGet(flightId);
+        if (reply == null) {
+            return Map.of("success", false, "message", "平台未回复（超时）");
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("reply", reply);
+        return result;
+    }
+
+    /**
+     * 手动触发 failed 状态的 flighttask_progress，携带 break_reason。
+     * <p>请求体：{"break_reason": 528}（可选，未传则按当前 Dock 型号默认值：dock1=528/dock2=529/dock3=517）</p>
+     * <p>break_reason 按当前 Dock 型号校验，非法值拒绝发送（529 仅 dock2 支持）</p>
+     */
+    @PostMapping("/flighttask-progress-break")
+    public Map<String, Object> publishFlighttaskProgressBreak(@RequestBody Map<String, Object> body) {
+        boolean sent;
+        if (body.containsKey("break_reason")) {
+            int breakReason = ((Number) body.get("break_reason")).intValue();
+            sent = waylineSimulator.publishProgressFailedWithBreakReason(breakReason);
+        } else {
+            sent = waylineSimulator.publishProgressFailedWithBreakReason();
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", sent);
+        if (!sent) {
+            result.put("message", "break_reason 在当前 Dock 类型中非法，参考 DJI wayline.html 枚举");
+        }
+        return result;
     }
 
     // ==================== 直播 ====================
@@ -476,6 +658,393 @@ public class SimulatorController {
         return result;
     }
 
+    /**
+     * 触发 AirSense 告警通知（method=airsense_warning）。
+     * <p>请求体示例：
+     * {@code {"icao":"B-5931","warning_level":3,"latitude":12.23,"longitude":12.23,
+     *   "altitude":100,"altitude_type":1,"heading":89.1,
+     *   "relative_altitude":80,"vert_trend":0,"distance":100}}</p>
+     * <p>遵循"业务逻辑返回明确拒绝原因而非抛异常"约定。</p>
+     */
+    @PostMapping("/airsense-warning")
+    public Map<String, Object> triggerAirSenseWarning(@RequestBody Map<String, Object> body) {
+        String icao = (String) body.getOrDefault("icao", "B-0001");
+        int warningLevel = ((Number) body.getOrDefault("warning_level", 3)).intValue();
+        double latitude = ((Number) body.getOrDefault("latitude", 0.0)).doubleValue();
+        double longitude = ((Number) body.getOrDefault("longitude", 0.0)).doubleValue();
+        int altitude = ((Number) body.getOrDefault("altitude", 100)).intValue();
+        int altitudeType = ((Number) body.getOrDefault("altitude_type", 1)).intValue();
+        double heading = ((Number) body.getOrDefault("heading", 0.0)).doubleValue();
+        int relativeAltitude = ((Number) body.getOrDefault("relative_altitude", 50)).intValue();
+        int vertTrend = ((Number) body.getOrDefault("vert_trend", 0)).intValue();
+        int distance = ((Number) body.getOrDefault("distance", 100)).intValue();
+
+        AirSenseSimulator.AirSenseAlert alert = new AirSenseSimulator.AirSenseAlert(
+                icao, warningLevel, latitude, longitude, altitude,
+                altitudeType, heading, relativeAltitude, vertTrend, distance);
+
+        AirSenseSimulator.TriggerResult r = airSenseSimulator.trigger(List.of(alert));
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", r.success());
+        result.put("code", r.code());
+        result.put("message", r.message());
+        result.put("count", r.count());
+        return result;
+    }
+
+    // ==================== 自定义飞行区触发（wayline.html，Dock3） ====================
+
+    /**
+     * 触发飞行器位置告警推送（method=flight_areas_drone_location）。
+     * <p>请求体示例：
+     * {@code {"locations":[{"area_id":"xxx","area_distance":100.11,"is_in_area":true}]}}</p>
+     * <p>遵循"业务逻辑返回明确拒绝原因而非抛异常"约定。</p>
+     */
+    @PostMapping("/flight-areas/drone-location")
+    public Map<String, Object> triggerFlightAreaDroneLocation(@RequestBody Map<String, Object> body) {
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> rawLocations = (List<Map<String, Object>>) body.getOrDefault("locations", List.of());
+
+        List<FlightAreaSimulator.DroneLocation> locations = rawLocations.stream()
+                .map(loc -> new FlightAreaSimulator.DroneLocation(
+                        (String) loc.getOrDefault("area_id", ""),
+                        ((Number) loc.getOrDefault("area_distance", 0.0)).doubleValue(),
+                        Boolean.TRUE.equals(loc.get("is_in_area"))))
+                .toList();
+
+        FlightAreaSimulator.TriggerResult r = flightAreaSimulator.triggerDroneLocation(locations);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", r.success());
+        result.put("code", r.code());
+        result.put("message", r.message());
+        result.put("count", r.count());
+        return result;
+    }
+
+    /**
+     * 触发文件同步进度上报（method=flight_areas_sync_progress）。
+     * <p>请求体示例：
+     * {@code {"status":"synchronized","reason":0,"file":{"name":"geofence_xxx.json","checksum":"sha256"}}}</p>
+     * <p>status 枚举：fail/switch_fail/synchronized/synchronizing/wait_sync</p>
+     */
+    @PostMapping("/flight-areas/sync-progress")
+    public Map<String, Object> triggerFlightAreaSyncProgress(@RequestBody Map<String, Object> body) {
+        String statusStr = (String) body.getOrDefault("status", "synchronized");
+        FlightAreaSimulator.SyncStatus status = FlightAreaSimulator.SyncStatus.fromCode(statusStr);
+        int reason = ((Number) body.getOrDefault("reason", 0)).intValue();
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> fileMap = (Map<String, Object>) body.get("file");
+        FlightAreaSimulator.FlightAreaFile file = null;
+        if (fileMap != null) {
+            file = new FlightAreaSimulator.FlightAreaFile(
+                    (String) fileMap.getOrDefault("name", ""),
+                    (String) fileMap.getOrDefault("checksum", ""));
+        }
+
+        FlightAreaSimulator.TriggerResult r = flightAreaSimulator.triggerSyncProgress(status, reason, file);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", r.success());
+        result.put("code", r.code());
+        result.put("message", r.message());
+        return result;
+    }
+
+    /**
+     * 主动获取飞行区文件（method=flight_areas_get，Requests）。
+     * <p>发送 requests 并等待平台回复，返回 reply 内容。</p>
+     */
+    @PostMapping("/flight-areas/get")
+    public Map<String, Object> requestFlightAreas() {
+        FlightAreaSimulator.RequestResult r = flightAreaSimulator.requestFlightAreas();
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", r.success());
+        result.put("code", r.code());
+        result.put("message", r.message());
+        if (r.reply() != null) {
+            result.put("reply", r.reply());
+        }
+        result.put("fileValid", r.fileValid());
+        return result;
+    }
+
+    // ==================== 远程解禁（Dock3 wayline.html） ====================
+
+    /**
+     * 查询当前解禁证书列表（license_id → enabled）。
+     * <p>平台通过 services 下发 unlock_license_switch 后，证书状态会更新到此列表。</p>
+     */
+    @GetMapping("/unlock-license/list")
+    public Map<String, Object> listUnlockLicenses() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("licenses", unlockLicenseSimulator.getLicenses());
+        return result;
+    }
+
+    /**
+     * 重置解禁证书列表（清空所有证书状态）。
+     */
+    @PostMapping("/unlock-license/reset")
+    public Map<String, Object> resetUnlockLicenses() {
+        unlockLicenseSimulator.resetLicenses();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("message", "已清空解禁证书列表");
+        return result;
+    }
+
+    // ==================== PSDK 喊话器与负载事件（Dock3 wayline.html） ====================
+
+    /**
+     * 查询指定 psdk_index 的喊话器状态。
+     * <p>请求参数：psdk_index（int，必填）</p>
+     */
+    @GetMapping("/psdk/state")
+    public Map<String, Object> getPsdkState(@RequestParam int psdk_index) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("psdk_index", psdk_index);
+        result.put("play_volume", psdkSimulator.getSpeakerVolume(psdk_index));
+        result.put("play_mode", psdkSimulator.getSpeakerPlayMode(psdk_index));
+        result.put("playing", psdkSimulator.isSpeakerPlaying(psdk_index));
+        result.put("default_tts_text", psdkSimulator.getDefaultTtsText());
+        result.put("default_tts_md5", psdkSimulator.getDefaultTtsMd5());
+        result.put("default_audio_md5", psdkSimulator.getDefaultAudioMd5());
+        result.put("last_tts", psdkSimulator.getLastTts(psdk_index));
+        result.put("last_audio_file", psdkSimulator.getLastAudioFile(psdk_index));
+        result.put("input_box_text", psdkSimulator.getInputBoxText(psdk_index));
+        result.put("widget_values", psdkSimulator.getWidgetValues(psdk_index));
+        result.put("last_custom_data", psdkSimulator.getLastCustomData());
+        return result;
+    }
+
+    /**
+     * 触发 speaker_tts_play_start_progress 事件（TTS 播放进度通知）。
+     * <p>请求体示例：
+     * {@code {"psdk_index":2,"status":"in_progress","percent":50,"step_key":"upload","md5":"可选覆盖"}}</p>
+     * <p>遵循"业务逻辑返回明确拒绝原因而非抛异常"约定。</p>
+     */
+    @PostMapping("/psdk/tts-play-progress")
+    public Map<String, Object> triggerTtsPlayProgress(@RequestBody Map<String, Object> body) {
+        if (body.get("psdk_index") == null) {
+            return fail("psdk_index 为必填");
+        }
+        int psdkIndex = ((Number) body.get("psdk_index")).intValue();
+        String status = String.valueOf(body.getOrDefault("status", "in_progress"));
+        int percent = ((Number) body.getOrDefault("percent", 0)).intValue();
+        String stepKey = String.valueOf(body.getOrDefault("step_key", "upload"));
+        String md5Override = body.get("md5") == null ? null : String.valueOf(body.get("md5"));
+
+        PsdkSimulator.TriggerResult r = psdkSimulator.triggerTtsPlayProgress(
+                psdkIndex, status, percent, stepKey, md5Override);
+        return triggerResultMap(r);
+    }
+
+    /**
+     * 触发 speaker_audio_play_start_progress 事件（音频播放进度通知）。
+     * <p>请求体示例：
+     * {@code {"psdk_index":2,"status":"in_progress","percent":89,"step_key":"upload","md5":"可选覆盖"}}</p>
+     */
+    @PostMapping("/psdk/audio-play-progress")
+    public Map<String, Object> triggerAudioPlayProgress(@RequestBody Map<String, Object> body) {
+        if (body.get("psdk_index") == null) {
+            return fail("psdk_index 为必填");
+        }
+        int psdkIndex = ((Number) body.get("psdk_index")).intValue();
+        String status = String.valueOf(body.getOrDefault("status", "in_progress"));
+        int percent = ((Number) body.getOrDefault("percent", 0)).intValue();
+        String stepKey = String.valueOf(body.getOrDefault("step_key", "upload"));
+        String md5Override = body.get("md5") == null ? null : String.valueOf(body.get("md5"));
+
+        PsdkSimulator.TriggerResult r = psdkSimulator.triggerAudioPlayProgress(
+                psdkIndex, status, percent, stepKey, md5Override);
+        return triggerResultMap(r);
+    }
+
+    /**
+     * 触发 psdk_floating_window_text 事件（浮窗文本推送）。
+     * <p>请求体示例：{@code {"psdk_index":2,"value":"System time : 1193683 ms"}}</p>
+     */
+    @PostMapping("/psdk/floating-window-text")
+    public Map<String, Object> triggerFloatingWindowText(@RequestBody Map<String, Object> body) {
+        if (body.get("psdk_index") == null) {
+            return fail("psdk_index 为必填");
+        }
+        int psdkIndex = ((Number) body.get("psdk_index")).intValue();
+        String value = String.valueOf(body.getOrDefault("value", ""));
+
+        PsdkSimulator.TriggerResult r = psdkSimulator.triggerFloatingWindowText(psdkIndex, value);
+        return triggerResultMap(r);
+    }
+
+    /**
+     * 触发 psdk_ui_resource_upload_result 事件（UI 资源包上传结果上报）。
+     * <p>请求体示例：
+     * {@code {"psdk_index":2,"object_key":"xxx/widget","size":43488,"result":0}}</p>
+     */
+    @PostMapping("/psdk/ui-resource-upload-result")
+    public Map<String, Object> triggerUiResourceUploadResult(@RequestBody Map<String, Object> body) {
+        if (body.get("psdk_index") == null) {
+            return fail("psdk_index 为必填");
+        }
+        int psdkIndex = ((Number) body.get("psdk_index")).intValue();
+        String objectKey = String.valueOf(body.getOrDefault("object_key", ""));
+        long size = ((Number) body.getOrDefault("size", 0)).longValue();
+        int result = ((Number) body.getOrDefault("result", 0)).intValue();
+
+        PsdkSimulator.TriggerResult r = psdkSimulator.triggerUiResourceUploadResult(
+                psdkIndex, objectKey, size, result);
+        return triggerResultMap(r);
+    }
+
+    /**
+     * PSDK UI 资源完整上传流程：storage_config_get(module=1) → 上传内置占位文件 → 上报 psdk_ui_resource_upload_result 事件。
+     * <p>请求体示例：{@code {"psdk_index":2}}</p>
+     */
+    @PostMapping("/psdk/ui-resource-upload")
+    public Map<String, Object> uploadUiResource(@RequestBody Map<String, Object> body) {
+        if (body.get("psdk_index") == null) {
+            return fail("psdk_index 为必填");
+        }
+        int psdkIndex = ((Number) body.get("psdk_index")).intValue();
+
+        PsdkSimulator.TriggerResult r = psdkSimulator.uploadUiResource(psdkIndex);
+        return triggerResultMap(r);
+    }
+
+    /**
+     * 触发 custom_data_transmission_from_psdk 事件（PSDK→cloud 自定义消息推送）。
+     * <p>请求体示例：{@code {"value":"hello world"}}</p>
+     */
+    @PostMapping("/psdk/custom-data-from-psdk")
+    public Map<String, Object> triggerCustomDataFromPsdk(@RequestBody Map<String, Object> body) {
+        if (body.get("value") == null) {
+            return fail("value 为必填");
+        }
+        String value = body.get("value").toString();
+        PsdkSimulator.TriggerResult r = psdkSimulator.triggerCustomDataFromPsdk(value);
+        return triggerResultMap(r);
+    }
+
+    /**
+     * 触发 custom_data_transmission_from_esdk 事件（ESDK→cloud 自定义消息推送）。
+     * <p>请求体示例：{@code {"value":"hello world"}}</p>
+     */
+    @PostMapping("/esdk/custom-data-from-esdk")
+    public Map<String, Object> triggerCustomDataFromEsdk(@RequestBody Map<String, Object> body) {
+        if (body.get("value") == null) {
+            return fail("value 为必填");
+        }
+        String value = body.get("value").toString();
+        EsdkSimulator.TriggerResult r = esdkSimulator.triggerCustomDataFromEsdk(value);
+        return triggerResultMap(r);
+    }
+
+    /**
+     * 查询 ESDK 互联互通状态。
+     */
+    @GetMapping("/esdk/state")
+    public Map<String, Object> getEsdkState() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("last_custom_data", esdkSimulator.getLastCustomData());
+        return result;
+    }
+
+    // ==================== 远程日志 ====================
+
+    /**
+     * 查询远程日志上传状态。
+     */
+    @GetMapping("/remote-log/state")
+    public Map<String, Object> getRemoteLogState() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("uploading", remoteLogSimulator.isUploading());
+        result.put("files", remoteLogSimulator.getCurrentUploadFiles());
+        return result;
+    }
+
+    /**
+     * 手动触发 fileupload_progress 事件。
+     * <p>请求体示例：{@code {"status":"ok","percent":100}}</p>
+     */
+    @PostMapping("/remote-log/progress")
+    public Map<String, Object> triggerRemoteLogProgress(@RequestBody Map<String, Object> body) {
+        String status = body.getOrDefault("status", "ok").toString();
+        int percent = Integer.parseInt(body.getOrDefault("percent", "100").toString());
+        RemoteLogSimulator.TriggerResult r = remoteLogSimulator.triggerFileUploadProgress(status, percent);
+        return triggerResultMap(r);
+    }
+
+    // ==================== 固件升级 ====================
+
+    /**
+     * 查询固件升级状态。
+     */
+    @GetMapping("/ota/state")
+    public Map<String, Object> getOtaState() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("upgrading", otaSimulator.isUpgrading());
+        result.put("devices", otaSimulator.getCurrentUpgradeDevices());
+        return result;
+    }
+
+    /**
+     * 手动触发 ota_progress 事件。
+     * <p>请求体示例：{@code {"status":"in_progress","current_step":"download_firmware","percent":50}}</p>
+     */
+    @PostMapping("/ota/progress")
+    public Map<String, Object> triggerOtaProgress(@RequestBody Map<String, Object> body) {
+        String status = body.getOrDefault("status", "in_progress").toString();
+        String currentStep = body.getOrDefault("current_step", "download_firmware").toString();
+        int percent = Integer.parseInt(body.getOrDefault("percent", "50").toString());
+        OtaSimulator.TriggerResult r = otaSimulator.triggerOtaProgress(status, currentStep, percent);
+        return triggerResultMap(r);
+    }
+
+    private Map<String, Object> triggerResultMap(PsdkSimulator.TriggerResult r) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", r.success());
+        if (r.code() != null) result.put("code", r.code());
+        if (r.message() != null) result.put("message", r.message());
+        return result;
+    }
+
+    private Map<String, Object> triggerResultMap(EsdkSimulator.TriggerResult r) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", r.success());
+        if (r.code() != null) result.put("code", r.code());
+        if (r.message() != null) result.put("message", r.message());
+        return result;
+    }
+
+    private Map<String, Object> triggerResultMap(RemoteLogSimulator.TriggerResult r) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", r.success());
+        if (r.code() != null) result.put("code", r.code());
+        if (r.message() != null) result.put("message", r.message());
+        return result;
+    }
+
+    private Map<String, Object> triggerResultMap(OtaSimulator.TriggerResult r) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", r.success());
+        if (r.code() != null) result.put("code", r.code());
+        if (r.message() != null) result.put("message", r.message());
+        return result;
+    }
+
+    private Map<String, Object> fail(String message) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", false);
+        result.put("message", message);
+        return result;
+    }
+
     // ==================== 指令飞行事件触发（drc.html，无前端 UI） ====================
 
     /**
@@ -612,6 +1181,68 @@ public class SimulatorController {
         return result;
     }
 
+    /**
+     * 导出 OSD 日志数据（替代外部 PowerShell 脚本，避免 Windows Defender 误报）。
+     * <p>从 MQTT 消息日志中过滤指定设备的 OSD 上报数据，返回 {topic, data} 格式。
+     * <p>用法：GET /api/logs/osd-export?sn=7UUXN1Q00A008W&direction=send&limit=200
+     *
+     * @param sn        设备 SN（多个用逗号分隔，必填）
+     * @param direction 方向过滤（默认 send）
+     * @param limit     返回条数（默认 200）
+     * @return OSD 日志列表，每条含 {topic, data}
+     */
+    @GetMapping("/logs/osd-export")
+    public List<Map<String, Object>> exportOsdLogs(
+            @RequestParam String sn,
+            @RequestParam(defaultValue = "send") String direction,
+            @RequestParam(defaultValue = "200") int limit) {
+        // 解析 SN 列表
+        List<String> snList = Arrays.stream(sn.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toList());
+
+        List<Map<String, Object>> logs = mqtt.getLogs();
+        List<Map<String, Object>> result = new ArrayList<>();
+
+        // 倒序遍历（取最新 limit 条）
+        for (int i = logs.size() - 1; i >= 0 && result.size() < limit; i--) {
+            Map<String, Object> entry = logs.get(i);
+            String entryDirection = String.valueOf(entry.get("direction"));
+            String topic = String.valueOf(entry.get("topic"));
+
+            // 方向过滤
+            if (!direction.equals(entryDirection)) {
+                continue;
+            }
+            // SN 过滤（topic 包含任一 SN 即匹配）
+            boolean snMatched = snList.stream().anyMatch(topic::contains);
+            if (!snMatched) {
+                continue;
+            }
+            // 按 topic 过滤 OSD 数据（topic 以 /osd 结尾），不依赖 payload 字段
+            // Dock OSD 分多条推送（电源/任务/位置），只有部分含 latitude/sub_device，按字段过滤会遗漏
+            if (!topic.endsWith("/osd")) {
+                continue;
+            }
+            String payload = String.valueOf(entry.get("payload"));
+            try {
+                JsonNode node = objectMapper.readTree(payload);
+                JsonNode data = node.path("data");
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("topic", topic);
+                item.put("data", objectMapper.treeToValue(data, Object.class));
+                result.add(item);
+            } catch (Exception e) {
+                // payload 非 JSON 或解析失败，跳过
+            }
+        }
+
+        // 反转为正序（旧→新），与 /api/logs 一致
+        java.util.Collections.reverse(result);
+        return result;
+    }
+
     // ==================== 连接状态与配置 ====================
 
     /** 获取 MQTT 连接状态 */
@@ -643,6 +1274,137 @@ public class SimulatorController {
         result.put("controller_sn", runtimeConfig.getControllerSn());
         result.put("dock_sn", runtimeConfig.getDockSn());
         result.put("drone_sn", runtimeConfig.getDroneSn());
+        return result;
+    }
+
+    /**
+     * 获取 Pilot 上云配置（HTTP/WS 接口 + map 模块 + media/live/mop 模块）。
+     * <p>供前端 Pilot 上云页面加载已保存的 token / map 配置及 media/live/mop 参数。
+     */
+    @GetMapping("/config/pilot")
+    public Map<String, Object> getPilotConfig() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("http_base_url", runtimeConfig.getHivemindHttpBaseUrl());
+        result.put("http_token", runtimeConfig.getHivemindHttpToken());
+        result.put("ws_url", runtimeConfig.getHivemindWsUrl());
+        result.put("ws_token", runtimeConfig.getHivemindWsToken());
+        result.put("map_user_name", runtimeConfig.getMapUserName());
+        result.put("map_element_pre_name", runtimeConfig.getMapElementPreName());
+        result.put("media_auto_upload_photo", runtimeConfig.isMediaAutoUploadPhoto());
+        result.put("media_auto_upload_photo_type", runtimeConfig.getMediaAutoUploadPhotoType());
+        result.put("media_auto_upload_video", runtimeConfig.isMediaAutoUploadVideo());
+        result.put("media_download_owner", runtimeConfig.getMediaDownloadOwner());
+        result.put("live_video_publish_type", runtimeConfig.getLiveVideoPublishType());
+        result.put("mop_host", runtimeConfig.getMopHost());
+        result.put("mop_token", runtimeConfig.getMopToken());
+        result.put("mop_connected", mopClient.isConnected());
+        return result;
+    }
+
+    /**
+     * 更新 Pilot 上云配置（HTTP/WS 接口 + map 模块 + media/live/mop 模块）。
+     * <p>支持部分更新：仅更新请求中包含的字段。
+     * <p>这些配置不常用，不持久化到 LiveConfigStore，重启后回退到 yml 默认值。
+     */
+    @PostMapping("/config/pilot")
+    public Map<String, Object> updatePilotConfig(@RequestBody Map<String, Object> body) {
+        if (body.containsKey("http_base_url")) {
+            String url = (String) body.get("http_base_url");
+            runtimeConfig.setHivemindHttpBaseUrl(url != null ? url : "");
+        }
+        if (body.containsKey("http_token")) {
+            String token = (String) body.get("http_token");
+            runtimeConfig.setHivemindHttpToken(token != null ? token : "");
+        }
+        if (body.containsKey("ws_url")) {
+            String url = (String) body.get("ws_url");
+            runtimeConfig.setHivemindWsUrl(url != null ? url : "");
+        }
+        if (body.containsKey("ws_token")) {
+            String token = (String) body.get("ws_token");
+            runtimeConfig.setHivemindWsToken(token != null ? token : "");
+        }
+        if (body.containsKey("map_user_name")) {
+            String userName = (String) body.get("map_user_name");
+            runtimeConfig.setMapUserName(userName != null ? userName : "");
+        }
+        if (body.containsKey("map_element_pre_name")) {
+            String preName = (String) body.get("map_element_pre_name");
+            runtimeConfig.setMapElementPreName(preName != null ? preName : "");
+        }
+        if (body.containsKey("media_auto_upload_photo")) {
+            runtimeConfig.setMediaAutoUploadPhoto(Boolean.parseBoolean(String.valueOf(body.get("media_auto_upload_photo"))));
+        }
+        if (body.containsKey("media_auto_upload_photo_type")) {
+            runtimeConfig.setMediaAutoUploadPhotoType(parseIntValue(body.get("media_auto_upload_photo_type")));
+        }
+        if (body.containsKey("media_auto_upload_video")) {
+            runtimeConfig.setMediaAutoUploadVideo(Boolean.parseBoolean(String.valueOf(body.get("media_auto_upload_video"))));
+        }
+        if (body.containsKey("media_download_owner")) {
+            runtimeConfig.setMediaDownloadOwner(parseIntValue(body.get("media_download_owner")));
+        }
+        if (body.containsKey("live_video_publish_type")) {
+            String type = (String) body.get("live_video_publish_type");
+            runtimeConfig.setLiveVideoPublishType(type != null ? type : "video-on-demand");
+        }
+        if (body.containsKey("mop_host")) {
+            String host = (String) body.get("mop_host");
+            runtimeConfig.setMopHost(host != null ? host : "");
+        }
+        if (body.containsKey("mop_token")) {
+            String token = (String) body.get("mop_token");
+            runtimeConfig.setMopToken(token != null ? token : "");
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        return result;
+    }
+
+    /** 安全解析 Integer，支持 Number 和 String 输入，解析失败返回 0 */
+    private int parseIntValue(Object value) {
+        if (value == null) {
+            return 0;
+        }
+        if (value instanceof Number) {
+            return ((Number) value).intValue();
+        }
+        try {
+            return Integer.parseInt(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
+    // ==================== MOP 数据传输（Pilot 上云） ====================
+
+    /** 连接 MOP WebSocket 通道 */
+    @PostMapping("/mop/connect")
+    public Map<String, Object> mopConnect() {
+        mopClient.connect();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("mop_connected", mopClient.isConnected());
+        return result;
+    }
+
+    /** 断开 MOP WebSocket 通道 */
+    @PostMapping("/mop/disconnect")
+    public Map<String, Object> mopDisconnect() {
+        mopClient.disconnect();
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("mop_connected", mopClient.isConnected());
+        return result;
+    }
+
+    /** 查询 MOP 连接状态 */
+    @GetMapping("/mop/status")
+    public Map<String, Object> mopStatus() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("success", true);
+        result.put("mop_connected", mopClient.isConnected());
+        result.put("mop_host", runtimeConfig.getMopHost());
         return result;
     }
 
@@ -786,5 +1548,291 @@ public class SimulatorController {
                 ? runtimeConfig.getMqttHost() + ":" + runtimeConfig.getMqttPort()
                 : host;
         return coverageRecorder.generateHtmlReport(target);
+    }
+
+    // ==================== 地图元素（Pilot 上云 HTTP API） ====================
+
+    /** 获取地图元素列表 */
+    @GetMapping("/api/map/elements")
+    public Map<String, Object> getMapElements(@RequestParam(required = false) String groupId) {
+        var resp = mapElementSimulator.fetchElements(groupId);
+        return Map.of("success", resp.success(), "code", resp.code(),
+                "message", resp.message(), "data", resp.data() != null ? resp.data() : "");
+    }
+
+    /** 创建地图元素 */
+    @PostMapping("/api/map/elements")
+    public Map<String, Object> createMapElement(@RequestParam String groupId, @RequestBody JsonNode body) {
+        var resp = mapElementSimulator.createElement(groupId, body);
+        return Map.of("success", resp.success(), "code", resp.code(),
+                "message", resp.message(), "data", resp.data() != null ? resp.data() : "");
+    }
+
+    /** 更新地图元素 */
+    @PutMapping("/api/map/elements/{elementId}")
+    public Map<String, Object> updateMapElement(@PathVariable String elementId, @RequestBody JsonNode body) {
+        var resp = mapElementSimulator.updateElement(elementId, body);
+        return Map.of("success", resp.success(), "code", resp.code(),
+                "message", resp.message(), "data", resp.data() != null ? resp.data() : "");
+    }
+
+    /** 删除地图元素 */
+    @DeleteMapping("/api/map/elements/{elementId}")
+    public Map<String, Object> deleteMapElement(@PathVariable String elementId) {
+        var resp = mapElementSimulator.deleteElement(elementId);
+        return Map.of("success", resp.success(), "code", resp.code(),
+                "message", resp.message(), "data", resp.data() != null ? resp.data() : "");
+    }
+
+    // ==================== 地图元素 WebSocket 推送事件历史（Pilot 上云） ====================
+
+    /** 查询 WebSocket 推送事件历史 */
+    @GetMapping("/api/map/ws-events")
+    public Map<String, Object> getMapWsEvents() {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，WebSocket 功能不可用");
+        }
+        return Map.of(
+                "success", true,
+                "events", mapElementSimulator.getWsEvents(),
+                "count", mapElementSimulator.getWsEventCount(),
+                "wsConnected", mapElementSimulator.isWsConnected()
+        );
+    }
+
+    /** 清空 WebSocket 推送事件历史 */
+    @DeleteMapping("/api/map/ws-events")
+    public Map<String, Object> clearMapWsEvents() {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，WebSocket 功能不可用");
+        }
+        mapElementSimulator.clearWsEvents();
+        return Map.of("success", true, "message", "已清空");
+    }
+
+    // ==================== 态势感知（Pilot 上云） ====================
+
+    /** 手动触发获取设备拓扑列表 */
+    @GetMapping("/api/tsa/device-topo")
+    public Map<String, Object> fetchDeviceTopo() {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，态势感知功能不可用");
+        }
+        var resp = situationAwarenessSimulator.fetchDeviceTopo();
+        return Map.of("success", resp.success(), "code", resp.code(),
+                "message", resp.message(), "data", resp.data() != null ? resp.data() : "");
+    }
+
+    /** 查询态势感知 WebSocket 推送事件历史 */
+    @GetMapping("/api/tsa/ws-events")
+    public Map<String, Object> getTsaWsEvents() {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，WebSocket 功能不可用");
+        }
+        return Map.of(
+                "success", true,
+                "events", situationAwarenessSimulator.getWsEvents(),
+                "count", situationAwarenessSimulator.getWsEventCount()
+        );
+    }
+
+    /** 清空态势感知 WebSocket 推送事件历史 */
+    @DeleteMapping("/api/tsa/ws-events")
+    public Map<String, Object> clearTsaWsEvents() {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，WebSocket 功能不可用");
+        }
+        situationAwarenessSimulator.clearWsEvents();
+        return Map.of("success", true, "message", "已清空");
+    }
+
+    // ==================== Pilot 上云 HTTP 接口（媒体/存储/航线） ====================
+
+    // ---------- 存储服务 ----------
+
+    /** 获取上传临时凭证（STS） */
+    @PostMapping("/storage/sts")
+    public Map<String, Object> getSts() {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，HTTP 接口不可用");
+        }
+        var resp = pilotHttpSimulator.getSts();
+        return Map.of(
+                "success", resp.success(),
+                "code", resp.code(),
+                "message", resp.message(),
+                "data", resp.data() != null ? resp.data() : "-"
+        );
+    }
+
+    // ---------- 媒体管理 ----------
+
+    /** 文件快传（秒传） */
+    @PostMapping("/media/fast-upload")
+    public Map<String, Object> mediaFastUpload(@RequestBody JsonNode body) {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，HTTP 接口不可用");
+        }
+        var resp = pilotHttpSimulator.fastUpload(body);
+        return Map.of(
+                "success", resp.success(),
+                "code", resp.code(),
+                "message", resp.message(),
+                "data", resp.data() != null ? resp.data() : "-"
+        );
+    }
+
+    /** 获取已存在的精简指纹 */
+    @PostMapping("/media/tiny-fingerprints")
+    public Map<String, Object> getTinyFingerprints(@RequestBody JsonNode body) {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，HTTP 接口不可用");
+        }
+        java.util.List<String> fingerprints = new java.util.ArrayList<>();
+        if (body.isArray()) {
+            body.forEach(n -> fingerprints.add(n.asText()));
+        }
+        var resp = pilotHttpSimulator.getTinyFingerprints(fingerprints);
+        return Map.of(
+                "success", resp.success(),
+                "code", resp.code(),
+                "message", resp.message(),
+                "data", resp.data() != null ? resp.data() : "-"
+        );
+    }
+
+    /** 媒体文件上传结果上报 */
+    @PostMapping("/media/upload-callback")
+    public Map<String, Object> mediaUploadCallback(@RequestBody JsonNode body) {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，HTTP 接口不可用");
+        }
+        var resp = pilotHttpSimulator.mediaUploadCallback(body);
+        return Map.of(
+                "success", resp.success(),
+                "code", resp.code(),
+                "message", resp.message(),
+                "data", resp.data() != null ? resp.data() : "-"
+        );
+    }
+
+    /** 文件组上传完成后回调 */
+    @PostMapping("/media/group-upload-callback")
+    public Map<String, Object> groupUploadCallback(@RequestBody JsonNode body) {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，HTTP 接口不可用");
+        }
+        var resp = pilotHttpSimulator.groupUploadCallback(body);
+        return Map.of(
+                "success", resp.success(),
+                "code", resp.code(),
+                "message", resp.message(),
+                "data", resp.data() != null ? resp.data() : "-"
+        );
+    }
+
+    // ---------- 航线管理 ----------
+
+    /** 获取航线文件列表 */
+    @GetMapping("/wayline/list")
+    public Map<String, Object> getWaylines(
+            @RequestParam(required = false) Boolean favorited,
+            @RequestParam(required = false) String orderBy,
+            @RequestParam(required = false) Integer page,
+            @RequestParam(required = false) Integer pageSize,
+            @RequestParam(required = false) List<Integer> templateTypes,
+            @RequestParam(required = false) Integer actionType,
+            @RequestParam(required = false) List<String> droneModelKeys,
+            @RequestParam(required = false) List<String> payloadModelKeys) {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，HTTP 接口不可用");
+        }
+        var resp = pilotHttpSimulator.getWaylines(favorited, orderBy, page, pageSize,
+                templateTypes, actionType, droneModelKeys, payloadModelKeys);
+        return Map.of(
+                "success", resp.success(),
+                "code", resp.code(),
+                "message", resp.message(),
+                "data", resp.data() != null ? resp.data() : "-"
+        );
+    }
+
+    /** 获取航线文件下载地址 */
+    @GetMapping("/wayline/{id}/url")
+    public Map<String, Object> getWaylineUrl(@PathVariable String id) {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，HTTP 接口不可用");
+        }
+        var resp = pilotHttpSimulator.getWaylineUrl(id);
+        return Map.of(
+                "success", resp.success(),
+                "code", resp.code(),
+                "message", resp.message(),
+                "data", resp.data() != null ? resp.data() : "-"
+        );
+    }
+
+    /** 获取重复的航线文件名称 */
+    @GetMapping("/wayline/duplicate-names")
+    public Map<String, Object> getDuplicateWaylineNames(@RequestParam List<String> names) {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，HTTP 接口不可用");
+        }
+        var resp = pilotHttpSimulator.getDuplicateWaylineNames(names);
+        return Map.of(
+                "success", resp.success(),
+                "code", resp.code(),
+                "message", resp.message(),
+                "data", resp.data() != null ? resp.data() : "-"
+        );
+    }
+
+    /** 航线文件上传结果上报 */
+    @PostMapping("/wayline/upload-callback")
+    public Map<String, Object> waylineUploadCallback(@RequestBody JsonNode body) {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，HTTP 接口不可用");
+        }
+        var resp = pilotHttpSimulator.waylineUploadCallback(body);
+        return Map.of(
+                "success", resp.success(),
+                "code", resp.code(),
+                "message", resp.message(),
+                "data", resp.data() != null ? resp.data() : "-"
+        );
+    }
+
+    /** 批量收藏航线文件 */
+    @PostMapping("/wayline/favorites")
+    public Map<String, Object> addWaylineFavorites(@RequestBody JsonNode body) {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，HTTP 接口不可用");
+        }
+        java.util.List<String> ids = new java.util.ArrayList<>();
+        if (body.has("id") && body.get("id").isArray()) {
+            body.get("id").forEach(n -> ids.add(n.asText()));
+        }
+        var resp = pilotHttpSimulator.addWaylineFavorites(ids);
+        return Map.of(
+                "success", resp.success(),
+                "code", resp.code(),
+                "message", resp.message(),
+                "data", resp.data() != null ? resp.data() : "-"
+        );
+    }
+
+    /** 批量取消收藏航线文件 */
+    @DeleteMapping("/wayline/favorites")
+    public Map<String, Object> removeWaylineFavorites(@RequestParam List<String> ids) {
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            return Map.of("success", false, "message", "非 Pilot 模式，HTTP 接口不可用");
+        }
+        var resp = pilotHttpSimulator.removeWaylineFavorites(ids);
+        return Map.of(
+                "success", resp.success(),
+                "code", resp.code(),
+                "message", resp.message(),
+                "data", resp.data() != null ? resp.data() : "-"
+        );
     }
 }

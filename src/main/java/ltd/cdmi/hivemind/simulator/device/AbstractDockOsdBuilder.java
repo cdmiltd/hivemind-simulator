@@ -25,7 +25,8 @@ import java.util.Map;
  * 子类通过 {@link #appendDockSpecific(OsdContext, Map, Map, Map)} 追加版本特有字段。</p>
  * <p>字段命名经 {@link OsdContext#getStrategy()} 的 {@link OsdStrategy#convertKey(String)} 转换，
  * 实现"字段集"与"命名风格"两个维度解耦。</p>
- * <p>对齐 DJI 文档「机场的设备属性推送是分多条推送的」：{@link #buildDockOsd(OsdContext)}
+ * <p>对齐 DJI 文档「机场的设备属性推送是分多条推送的」（Dock3 properties 文档「设备属性推送」章节）：
+ * {@link #buildDockOsd(OsdContext)}
  * 返回 3 条 OSD data（电源/电池/保养/统计、任务/图传/媒体、位置/环境/机械/子设备），
  * 由 {@link DeviceSimulator} 分别包装 envelope 发布到 osd topic。</p>
  * <p>注：{@code live_capacity} 的 pushMode=1，应在 state topic 上报，不在 OSD 中，

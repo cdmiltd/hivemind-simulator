@@ -23,6 +23,7 @@ import ltd.cdmi.hivemind.simulator.device.DeviceState;
 import ltd.cdmi.hivemind.simulator.device.DeviceType;
 import ltd.cdmi.hivemind.simulator.handler.FlightCommandSimulator;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
+import ltd.cdmi.hivemind.simulator.mqtt.DockTopicSchema;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -46,8 +47,11 @@ class FlightCommandSimulatorTest {
         return new SimulatorProperties(
                 new SimulatorProperties.Location(30.67, 104.07, 500.0),
                 new SimulatorProperties.Log(2000),
-                new SimulatorProperties.Live(false, "", ""),
-                new SimulatorProperties.Media("")
+                new SimulatorProperties.Live(false, "", "", null),
+                new SimulatorProperties.Media("", false, 0, false, 0),
+                null,
+                null,
+                null
         );
     }
 
@@ -75,7 +79,7 @@ class FlightCommandSimulatorTest {
         Mockito.when(mqtt.isConnected()).thenReturn(true);
 
         FlightCommandSimulator simulator = new FlightCommandSimulator(
-                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), diagnosticRecorder());
+                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), diagnosticRecorder(), new DockTopicSchema());
 
         // Dock3 下发含 rth_mode/commander_flight_mode/flight_safety_advance_check 的指令
         String json = """
@@ -119,7 +123,7 @@ class FlightCommandSimulatorTest {
         Mockito.when(mqtt.isConnected()).thenReturn(true);
 
         FlightCommandSimulator simulator = new FlightCommandSimulator(
-                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK1), diagnosticRecorder());
+                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK1), diagnosticRecorder(), new DockTopicSchema());
 
         // Dock1 不下发 rth_mode/commander_flight_mode/flight_safety_advance_check
         String json = """
@@ -157,7 +161,7 @@ class FlightCommandSimulatorTest {
         Mockito.when(mqtt.isConnected()).thenReturn(true);
 
         FlightCommandSimulator simulator = new FlightCommandSimulator(
-                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), diagnosticRecorder());
+                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), diagnosticRecorder(), new DockTopicSchema());
 
         String json = """
                 {
@@ -211,7 +215,7 @@ class FlightCommandSimulatorTest {
         DiagnosticLogRecorder recorder = diagnosticRecorder();
 
         FlightCommandSimulator simulator = new FlightCommandSimulator(
-                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), recorder);
+                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), recorder, new DockTopicSchema());
 
         String err = simulator.triggerRcLost();
 
@@ -247,7 +251,7 @@ class FlightCommandSimulatorTest {
         DiagnosticLogRecorder recorder = diagnosticRecorder();
 
         FlightCommandSimulator simulator = new FlightCommandSimulator(
-                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), recorder);
+                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), recorder, new DockTopicSchema());
 
         simulator.triggerRcLost();
 
@@ -291,7 +295,7 @@ class FlightCommandSimulatorTest {
         DiagnosticLogRecorder recorder = diagnosticRecorder();
 
         FlightCommandSimulator simulator = new FlightCommandSimulator(
-                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), recorder);
+                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), recorder, new DockTopicSchema());
 
         simulator.triggerRcLost();
 
@@ -328,7 +332,7 @@ class FlightCommandSimulatorTest {
         Mockito.when(mqtt.isConnected()).thenReturn(false);
 
         FlightCommandSimulator simulator = new FlightCommandSimulator(
-                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), diagnosticRecorder());
+                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), diagnosticRecorder(), new DockTopicSchema());
 
         String err = simulator.triggerRcLost();
 
@@ -350,7 +354,7 @@ class FlightCommandSimulatorTest {
         DiagnosticLogRecorder recorder = Mockito.mock(DiagnosticLogRecorder.class);
 
         FlightCommandSimulator simulator = new FlightCommandSimulator(
-                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), recorder);
+                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), recorder, new DockTopicSchema());
 
         String json = """
                 {
@@ -402,7 +406,7 @@ class FlightCommandSimulatorTest {
         DiagnosticLogRecorder recorder = Mockito.mock(DiagnosticLogRecorder.class);
 
         FlightCommandSimulator simulator = new FlightCommandSimulator(
-                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK1), recorder);
+                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK1), recorder, new DockTopicSchema());
 
         // Dock1 不下发 rth_mode 字段
         String json = """
@@ -444,7 +448,7 @@ class FlightCommandSimulatorTest {
         Mockito.when(mqtt.isConnected()).thenReturn(true);
 
         FlightCommandSimulator simulator = new FlightCommandSimulator(
-                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), diagnosticRecorder());
+                testProps(), mqtt, state, runtimeConfig(DeviceType.DOCK3), diagnosticRecorder(), new DockTopicSchema());
 
         state.setDroneActivated(true);
         state.setDroneInDock(false);

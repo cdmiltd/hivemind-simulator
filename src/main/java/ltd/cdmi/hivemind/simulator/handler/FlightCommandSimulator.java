@@ -19,12 +19,13 @@ import com.fasterxml.jackson.databind.JsonNode;
 import jakarta.annotation.PreDestroy;
 import ltd.cdmi.hivemind.simulator.config.RuntimeConfig;
 import ltd.cdmi.hivemind.simulator.config.SimulatorProperties;
+import ltd.cdmi.hivemind.simulator.device.DeviceMode;
 import ltd.cdmi.hivemind.simulator.device.DeviceState;
 import ltd.cdmi.hivemind.simulator.device.DeviceType;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticCode;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
+import ltd.cdmi.hivemind.simulator.mqtt.DockTopicSchema;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
-import ltd.cdmi.hivemind.simulator.mqtt.TopicConstants;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
@@ -47,7 +48,7 @@ import java.util.concurrent.TimeUnit;
  * <ul>
  *   <li>Service 指令：fly_to_point / takeoff_to_point（异步双阶段确认）、fly_to_point_stop / fly_to_point_update / flight_authority_grab / payload_authority_grab（同步）</li>
  *   <li>进度事件：fly_to_point_progress / takeoff_to_point_progress（bid 与原始 services 一致）</li>
- *   <li>设备主动上报事件：obstacle_avoidance_notify（仅 Dock3）、joystick_invalid_notify、camera_photo_take_progress、poi_status_notify（仅 Dock1）</li>
+ *   <li>设备主动上报事件：obstacle_avoidance_notify（仅 Dock3）、joystick_invalid_notify、camera_photo_take_progress、poi_status_notify（Dock1/Pilot）</li>
  * </ul>
  * <p>详见 DJI Cloud API <a href="https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html">指令飞行</a>。
  */
@@ -74,6 +75,7 @@ public class FlightCommandSimulator {
     private final DeviceState state;
     private final RuntimeConfig runtimeConfig;
     private final DiagnosticLogRecorder diagnosticRecorder;
+    private final DockTopicSchema dockTopicSchema;
     private final ScheduledExecutorService scheduler;
 
     /** fly_to_point 延迟任务引用（wayline_progress + wayline_ok），fly_to_point_stop 时取消 */
@@ -82,12 +84,14 @@ public class FlightCommandSimulator {
 
     public FlightCommandSimulator(SimulatorProperties props, MqttClientManager mqtt,
                                    DeviceState state, RuntimeConfig runtimeConfig,
-                                   DiagnosticLogRecorder diagnosticRecorder) {
+                                   DiagnosticLogRecorder diagnosticRecorder,
+                                   DockTopicSchema dockTopicSchema) {
         this.props = props;
         this.mqtt = mqtt;
         this.state = state;
         this.runtimeConfig = runtimeConfig;
         this.diagnosticRecorder = diagnosticRecorder;
+        this.dockTopicSchema = dockTopicSchema;
         this.scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "flight-cmd-scheduler");
             t.setDaemon(true);
@@ -198,16 +202,19 @@ public class FlightCommandSimulator {
      * @return services_reply 的 output（result=0）
      */
     public Map<String, Object> handleTakeoffToPoint(JsonNode data, String bid) {
-        // rth_mode=0（智能高度）拒绝：大疆机场不支持智能高度模式（TC-FLY-031）
+        // rth_mode=0（智能高度）拒绝：仅大疆机场不支持智能高度模式（TC-FLY-031）
+        // Pilot 模式下 rth_mode=0 是合法选项（Pilot 文档标注【必填】，未说不支持）
         // 仅显式下发 rth_mode=0 才拒绝；Dock1 不下发此字段（isMissingNode）不触发
-        JsonNode rthModeNode = data.path("rth_mode");
-        if (!rthModeNode.isMissingNode() && rthModeNode.asInt() == 0) {
-            // DJI 文档称"大疆机场当前不支持设置返航高度模式"，但未明确真机收到 rth_mode=0 的具体反应
-            // （错误码/行为），模拟器按拒绝执行返回 result=1，待真机验证
-            diagnosticRecorder.record(DiagnosticCode.MONITOR_SIMULATOR_INFERENCE, "takeoff_to_point",
-                    "rth_mode=0（智能高度）：DJI文档称机场不支持此模式，但未明确真机具体反应（错误码/行为），模拟器按拒绝执行返回result=1，待真机验证");
-            log.warn("[M-2] takeoff_to_point rth_mode=0: 模拟器未确认真机反应，按拒绝处理");
-            return Map.of("result", 1);
+        if (runtimeConfig.getDeviceMode() != DeviceMode.PILOT) {
+            JsonNode rthModeNode = data.path("rth_mode");
+            if (!rthModeNode.isMissingNode() && rthModeNode.asInt() == 0) {
+                // DJI 文档称"大疆机场当前不支持设置返航高度模式"，但未明确真机收到 rth_mode=0 的具体反应
+                // （错误码/行为），模拟器按拒绝执行返回 result=1，待真机验证
+                diagnosticRecorder.record(DiagnosticCode.MONITOR_SIMULATOR_INFERENCE, "takeoff_to_point",
+                        "rth_mode=0（智能高度）：DJI文档称机场不支持此模式，但未明确真机具体反应（错误码/行为），模拟器按拒绝执行返回result=1，待真机验证");
+                log.warn("[M-2] takeoff_to_point rth_mode=0: 模拟器未确认真机反应，按拒绝处理");
+                return Map.of("result", 1);
+            }
         }
 
         String flightId = data.path("flight_id").asText();
@@ -272,13 +279,13 @@ public class FlightCommandSimulator {
     }
 
     /**
-     * 处理 poi_mode_enter 指令（仅 Dock1，同步）。
+     * 处理 poi_mode_enter 指令（Dock1/Pilot，同步）。
      * <p>DJI 文档：进入 POI 环绕模式，解析 latitude/longitude/height，返回 result=0。
      * 触发 poi_status_notify(status=in_progress) 事件。</p>
      */
     public Map<String, Object> handlePoiModeEnter(JsonNode data) {
-        if (runtimeConfig.getDockType() != DeviceType.DOCK1) {
-            log.warn("[P-10] poi_mode_enter 仅 Dock1 支持，当前 Dock 类型: {}", runtimeConfig.getDockType());
+        if (!isPoiSupported()) {
+            log.warn("[P-10] poi_mode_enter 仅 Dock1/Pilot 支持，当前模式: {}", runtimeConfig.getDeviceMode());
             return Map.of("result", 1);
         }
         double latitude = data.path("latitude").asDouble();
@@ -290,13 +297,13 @@ public class FlightCommandSimulator {
     }
 
     /**
-     * 处理 poi_mode_exit 指令（仅 Dock1，同步）。
+     * 处理 poi_mode_exit 指令（Dock1/Pilot，同步）。
      * <p>DJI 文档：退出 POI 环绕模式，data=null，返回 result=0。
      * 触发 poi_status_notify(status=ok) 事件。</p>
      */
     public Map<String, Object> handlePoiModeExit() {
-        if (runtimeConfig.getDockType() != DeviceType.DOCK1) {
-            log.warn("[P-10] poi_mode_exit 仅 Dock1 支持，当前 Dock 类型: {}", runtimeConfig.getDockType());
+        if (!isPoiSupported()) {
+            log.warn("[P-10] poi_mode_exit 仅 Dock1/Pilot 支持，当前模式: {}", runtimeConfig.getDeviceMode());
             return Map.of("result", 1);
         }
         log.info("poi_mode_exit 指令: 退出 POI 环绕模式");
@@ -305,17 +312,29 @@ public class FlightCommandSimulator {
     }
 
     /**
-     * 处理 poi_circle_speed_set 指令（仅 Dock1，同步）。
+     * 处理 poi_circle_speed_set 指令（Dock1/Pilot，同步）。
      * <p>DJI 文档：设置 POI 环绕速度，解析 circle_speed，返回 result=0。无事件触发。</p>
      */
     public Map<String, Object> handlePoiCircleSpeedSet(JsonNode data) {
-        if (runtimeConfig.getDockType() != DeviceType.DOCK1) {
-            log.warn("[P-10] poi_circle_speed_set 仅 Dock1 支持，当前 Dock 类型: {}", runtimeConfig.getDockType());
+        if (!isPoiSupported()) {
+            log.warn("[P-10] poi_circle_speed_set 仅 Dock1/Pilot 支持，当前模式: {}", runtimeConfig.getDeviceMode());
             return Map.of("result", 1);
         }
         double circleSpeed = data.path("circle_speed").asDouble();
         log.info("poi_circle_speed_set 指令: circle_speed={}", circleSpeed);
         return Map.of("result", 0);
+    }
+
+    /**
+     * 判断当前模式是否支持 POI 环绕功能。
+     * <p>DJI 文档：poi_mode_enter/exit/circle_speed_set/poi_status_notify 仅 Dock1 和 Pilot 支持，
+     * Dock2/Dock3 不支持。核实依据：
+     * <a href="https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/drc.html">Pilot drc.html</a>、
+     * <a href="https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/drc.html">Dock3 drc.html</a>（无 POI 指令）。</p>
+     */
+    private boolean isPoiSupported() {
+        return runtimeConfig.getDeviceMode() == DeviceMode.PILOT
+                || runtimeConfig.getDockType() == DeviceType.DOCK1;
     }
 
     /**
@@ -524,13 +543,13 @@ public class FlightCommandSimulator {
     }
 
     /**
-     * 触发 poi_status_notify 事件（仅 Dock1）。
+     * 触发 poi_status_notify 事件（Dock1/Pilot）。
      * @return null=成功，非 null=拒绝原因
      */
     public String triggerPoiStatusNotify(String status, int reason,
                                           double circleRadius, double circleSpeed, double maxCircleSpeed) {
-        if (runtimeConfig.getDockType() != DeviceType.DOCK1) {
-            return "POI 环绕状态通知仅 Dock1 支持";
+        if (!isPoiSupported()) {
+            return "POI 环绕状态通知仅 Dock1/Pilot 支持";
         }
         if (!mqtt.isConnected()) {
             return "MQTT 未连接，无法上报";
@@ -681,11 +700,11 @@ public class FlightCommandSimulator {
             // DJI 指令飞行事件信封必填：1=需要答复（fly_to_point_progress/takeoff_to_point_progress/
             // obstacle_avoidance_notify/joystick_invalid_notify/camera_photo_take_progress 文档均为 need_reply=1）
             envelope.put("need_reply", 1);
-            envelope.put("gateway", runtimeConfig.getDockSn());
+            envelope.put("gateway", runtimeConfig.getGatewaySn());
             envelope.put("method", method);
             envelope.put("data", data);
 
-            String topic = TopicConstants.topic(TopicConstants.EVENTS, runtimeConfig.getDockSn());
+            String topic = dockTopicSchema.topic(dockTopicSchema.events(), runtimeConfig.getGatewaySn());
             mqtt.publishJson(topic, envelope);
             log.info("已发布 events: method={}, bid={}", method, bid);
         } catch (Exception e) {

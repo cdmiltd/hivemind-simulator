@@ -23,7 +23,11 @@ import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticCode;
 import ltd.cdmi.hivemind.simulator.mqtt.MonitorService;
 import org.springframework.web.bind.annotation.*;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import java.util.*;
+import java.util.stream.Collectors;
 
 /**
  * 监控器模式 REST API。
@@ -37,15 +41,18 @@ public class MonitorController {
     private final DockOnlineService dockOnlineService;
     private final PilotOnlineService pilotOnlineService;
     private final RuntimeConfig runtimeConfig;
+    private final ObjectMapper objectMapper;
 
     public MonitorController(MonitorService monitorService,
                              DockOnlineService dockOnlineService,
                              PilotOnlineService pilotOnlineService,
-                             RuntimeConfig runtimeConfig) {
+                             RuntimeConfig runtimeConfig,
+                             ObjectMapper objectMapper) {
         this.monitorService = monitorService;
         this.dockOnlineService = dockOnlineService;
         this.pilotOnlineService = pilotOnlineService;
         this.runtimeConfig = runtimeConfig;
+        this.objectMapper = objectMapper;
     }
 
     /** 连接到第三方平台 MQTT */
@@ -195,6 +202,63 @@ public class MonitorController {
         monitorService.clearLogs();
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("success", true);
+        return result;
+    }
+
+    /**
+     * 导出 OSD 日志数据（替代外部 PowerShell 脚本，避免 Windows Defender 误报）。
+     * <p>从监控器 MQTT 消息日志中过滤指定设备的 OSD 上报数据，返回 {topic, data} 格式。
+     * <p>用法：GET /api/monitor/logs/osd-export?sn=7UUXN1Q00A008W&direction=recv&limit=200
+     * <p>注意：监控器中 OSD 上报方向为 recv（设备→平台），与模拟器的 send 相反。
+     *
+     * @param sn        设备 SN（多个用逗号分隔，必填）
+     * @param direction 方向过滤（默认 recv，监控器中设备上报为 recv）
+     * @param limit     返回条数（默认 200）
+     * @return OSD 日志列表，每条含 {topic, data}
+     */
+    @GetMapping("/logs/osd-export")
+    public List<Map<String, Object>> exportOsdLogs(
+            @RequestParam String sn,
+            @RequestParam(defaultValue = "recv") String direction,
+            @RequestParam(defaultValue = "200") int limit) {
+        List<String> snList = Arrays.stream(sn.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .collect(Collectors.toList());
+
+        List<Map<String, Object>> logs = monitorService.getLogs();
+        List<Map<String, Object>> result = new ArrayList<>();
+
+        for (int i = logs.size() - 1; i >= 0 && result.size() < limit; i--) {
+            Map<String, Object> entry = logs.get(i);
+            String entryDirection = String.valueOf(entry.get("direction"));
+            String topic = String.valueOf(entry.get("topic"));
+
+            if (!direction.equals(entryDirection)) {
+                continue;
+            }
+            boolean snMatched = snList.stream().anyMatch(topic::contains);
+            if (!snMatched) {
+                continue;
+            }
+            // 按 topic 过滤 OSD 数据（topic 以 /osd 结尾），不依赖 payload 字段
+            if (!topic.endsWith("/osd")) {
+                continue;
+            }
+            String payload = String.valueOf(entry.get("payload"));
+            try {
+                JsonNode node = objectMapper.readTree(payload);
+                JsonNode data = node.path("data");
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("topic", topic);
+                item.put("data", objectMapper.treeToValue(data, Object.class));
+                result.add(item);
+            } catch (Exception e) {
+                // payload 非 JSON 或解析失败，跳过
+            }
+        }
+
+        Collections.reverse(result);
         return result;
     }
 

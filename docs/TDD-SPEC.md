@@ -88,7 +88,7 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 #### TC-REG-004：绑定码错误停止注册
 - **给定**：airport_organization_get 或 airport_organization_bind 返回 result=210229
 - **当**：收到回复
-- **那么**：停止注册流程，返回错误码 BIND_CODE_INVALID，提示「组织ID与绑定码错误」
+- **那么**：停止注册流程，透传错误码 210229，前端提示「组织ID与绑定码错误」
 - **错误后果**：继续执行会绑定到错误的组织
 
 #### TC-REG-005：config 请求超时重试
@@ -181,7 +181,42 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **那么**：所有 MQTT topic 使用该 SN（`thing/product/{sn}/...`）
 - **那么**：前端设备信息面板显示该 SN
 - **那么**：yml 不支持 `dock-sn` / `drone-sn` 配置（已移除，SN 完全由设备型号决定）
-- **SN 生成时机**：启动时根据 `dock-type` / `drone-type` 生成，运行时切换型号不自动更新 SN（与 MQTT 监听器在构造函数中绑定 SN 的设计一致）
+- **SN 生成时机**：启动时根据 `dock-type` / `drone-type` 生成，运行时切换型号会自动更新 SN（`RuntimeConfig.setDockType` 同步更新 `dockSn`）。各 Simulator 的 reply 监听器通过 `ensureReplyListeners()` 动态注册，dockSn 变化时自动重新绑定 topic（见 TC-REG-019）
+
+#### TC-REG-019：切换 Dock 类型后监听器动态重新注册（防回归）
+- **给定**：模拟器启动默认 Dock3（dockSn=`7UUXN1Q00A008W`），`DockOnlineService` 已注册 reply 监听器
+- **当**：运行时切换到 Dock1（`runtimeConfig.setDockType(DOCK1)`，dockSn 变为 `1UUXN1Q00A001W`）
+- **那么**：下次调用 `sendRequest()` / `sendUpdateTopo()` 时，`ensureReplyListeners()` 检测到 dockSn 变化，重新注册 `thing/product/1UUXN1Q00A001W/requests_reply` 和 `sys/product/1UUXN1Q00A001W/status_reply` 监听器
+- **那么**：平台回复到新 dockSn 的 topic 时，监听器能正常收到并完成 future，不超时
+- **错误后果**：若监听器不动态注册（构造时固定绑定默认 dockSn），切换 Dock 类型后平台回复无法被监听器接收，导致 `pendingReplies` future 永远不 complete → 超时 10s（用户反馈：三代机场上云成功，一代机场上云失败，但指令通讯窗口显示平台有回复）
+- **覆盖范围**：`DockOnlineService`（requests_reply + status_reply）、`MediaUploadSimulator`（events_reply）、`FlightAreaSimulator`（requests_reply）、`WaylineTaskSimulator`（requests_reply）、`PilotOnlineService`（status_reply，按 controllerSn）均需动态注册
+- **核实依据**：`RuntimeConfig.setDockType()` 自动更新 dockSn + `MqttClientManager.messageArrived()` 按 topic 精确匹配分发
+
+#### TC-REG-016：airport_organization_get/bind 返回非0 result 停止注册
+- **给定**：airport_organization_get 或 airport_organization_bind 返回 result≠0（如 210230「填写信息有误」、210234「组织不存在」等非 210229 的错误码）
+- **当**：收到回复
+- **那么**：停止注册流程，透传该 result 码（前端按 errorCodeMap 映射提示）
+- **那么**：不继续执行后续注册步骤（如 update_topo）
+- **错误后果**：继续执行 update_topo 会误导平台设备已上线，实际绑定未成功
+- **核实依据**：DJI Cloud API Dock2 协议规定 result 非 0 代表错误，应停止流程
+
+#### TC-REG-017：airport_organization_bind 返回 result=0 但 err_infos 非空停止注册
+- **给定**：airport_organization_bind 回复 result=0，但 `output.err_infos` 数组非空（含逐设备错误码，如 210231「设备已绑定其他组织」）
+- **当**：解析回复
+- **那么**：停止注册流程，透传 err_infos 中第一个 `err_code`（前端按 errorCodeMap 映射提示）
+- **那么**：完整 err_infos 记入日志
+- **那么**：记录 M-2 诊断日志（err_infos 非空即失败的判断逻辑为推断，DJI 文档未明确 err_code=0 是否会出现，待真机验证）
+- **错误后果**：result=0 但设备级绑定失败时仍继续上线，会导致平台设备状态不一致
+- **核实依据**：DJI Cloud API Dock2 协议 airport_organization_bind 回复结构含 `output.err_infos[]`，示例中 result=0 且 err_infos 含 210231。err_infos 字面意为"错误信息"，推断只含失败设备
+
+#### TC-REG-018：airport_bind_status 返回非0 result 停止注册
+- **给定**：airport_bind_status 回复 result≠0（请求级错误，如平台内部异常）
+- **当**：解析回复
+- **那么**：停止注册流程，透传 result 码
+- **那么**：不继续执行后续步骤（airport_organization_get / airport_organization_bind / update_topo）
+- **注意**：result=0 时，不根据 `bind_status[].is_device_bind_organization` 跳过后续步骤（TC-REG-003 每一步无条件执行），仅 result≠0 才停止
+- **错误后果**：绑定状态查询失败仍继续注册，可能导致后续步骤在错误状态下执行
+- **核实依据**：DJI Cloud API Dock1/Dock2 协议 airport_bind_status 回复规定 result 非 0 代表错误
 
 ### 2.3 上线流程
 
@@ -241,12 +276,29 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **给定**：设备已上线，飞行器从休眠切换为激活（`droneActivated` false→true）
 - **当**：状态切换发生时
 - **那么**：推送一次 drone state 到 `thing/product/{droneSn}/state`（事件性上报）
-- **那么**：包含所有 pushMode=1 的飞行器属性（payloads、wpmz_version、firmware_version、compatible_status、firmware_upgrade_status、mode_code_reason、home_longitude、home_latitude、control_source、low_battery_warning_threshold、serious_low_battery_warning_threshold、rth_mode、current_rth_mode、commander_mode_lost_action、current_commander_flight_mode、commander_flight_height、psdk_ui_resource、psdk_widget_values）
+- **那么**：包含所有 pushMode=1 的飞行器属性（payloads、wpmz_version、firmware_version、compatible_status、firmware_upgrade_status、mode_code_reason、home_longitude、home_latitude、control_source、low_battery_warning_threshold、serious_low_battery_warning_threshold、rth_mode、current_rth_mode、commander_mode_lost_action、commander_flight_mode、current_commander_flight_mode、commander_flight_height、psdk_ui_resource、psdk_widget_values）
 - **那么**：飞行器从激活切换为休眠时不推送（无属性变更需要上报）
 - **那么**：设备未上线时不推送（`state.online=false` 时跳过）
 - **核实依据**：DJI 设备管理时序图中上线流程包含"设备（飞行器）属性推送 Topic: thing/product/{device_sn}/state"；pushMode=1 属性在状态变化时上报
 - **文档 URL**：https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/aircraft/properties.html
 - **错误后果**：飞行器激活后平台未收到 drone state，无法识别负载、固件版本等信息
+
+#### TC-ONLINE-007-A：M400 Pilot 模式 drone state 字段集
+- **给定**：drone-type=M400（Matrice 400，Pilot 模式），设备已上线，飞行器激活
+- **当**：推送 drone state 到 `thing/product/{droneSn}/state`
+- **那么**：M400 与 M4E/M4T 的 pushMode=1 字段集一致，复用 `M4StateBuilder`（TC-ONLINE-011）
+- **那么**：包含 pushMode=1 字段（M400 Pilot 属性列表第一部分+第二部分合并）：
+  - offline_map_enable、dongle_infos、current_rth_mode、rth_mode
+  - compatible_status、firmware_upgrade_status、mode_code_reason
+  - commander_flight_mode（设置值）、current_commander_flight_mode（当前值）、commander_flight_height、commander_mode_lost_action
+  - home_longitude、home_latitude、control_source
+  - low_battery_warning_threshold、serious_low_battery_warning_threshold
+  - camera_watermark_settings（相机水印设置 struct）
+- **那么**：不包含顶层 `firmware_version`（M400 Pilot 属性列表 firmware_version pushMode=0，在 OSD 主题上报）
+- **那么**：不包含 `payloads`/`wpmz_version`/`psdk_ui_resource`/`psdk_widget_values`（M400 属性列表未列，用户确认）
+- **那么**：不包含 `wireless_link_topo`（M400 属性列表未列，仅 M3D/M4D 有）
+- **核实依据**：用户提供的 M400 Pilot 设备属性列表（pushMode=1 字段集）；用户确认 M400 无 payloads/wpmz_version/psdk_* 字段
+- **修正记录**：曾错误包含 payloads/wpmz_version/psdk_ui_resource/psdk_widget_values（Dock 模式字段误入），用户核实后已移除
 
 #### TC-ONLINE-008：飞行器休眠时发送 update_topo 通知平台
 - **给定**：设备已上线，飞行器从激活切换为休眠（`droneActivated` true→false）
@@ -258,6 +310,253 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **核实依据**：DJI SDK 源码中 `sub_devices` 为空 → `INBOUND_STATUS_OFFLINE`；设备管理时序图中下线流程发送空 `sub_devices`
 - **文档 URL**：https://developer.dji.com/doc/cloud-api-tutorial/cn/feature-set/dock-feature-set/dock-device-management.html
 - **错误后果**：飞行器休眠后平台仍认为飞行器在线，后续指令发往不存在的飞行器
+
+#### TC-ONLINE-009：Pilot 模式遥控器 state 字段集
+- **给定**：Pilot 模式，遥控器为 RC Plus 2（或 RC Plus / RC Pro），设备已上线
+- **当**：上线流程执行后，推送遥控器 state 到 `thing/product/{controllerSn}/state`
+- **那么**：包含 pushMode=1 字段（RC Plus 2 属性列表）：
+  - live_capacity（直播能力 struct，由 publishLiveCapacity 独立上报）
+  - dongle_infos（4G Dongle 信息 array）
+  - live_status（直播状态 array，默认空数组）
+  - firmware_version（固件版本 text，默认 "0.0.0.0"）
+  - cloud_control_auth（授权云控列表 array，默认空数组）
+- **那么**：不包含 pushMode=0 字段（capacity_percent/height/wireless_link/latitude/longitude/drc_state 在 OSD 主题上报）
+- **核实依据**：用户提供的 RC Plus 2 行业版设备属性列表（pushMode=1 字段集）
+- **待真机验证**：dongle_infos/live_status/firmware_version/cloud_control_auth 是否 RC Plus / RC Pro 也有（仅核实了 RC Plus 2）
+
+#### TC-ONLINE-010：Mavic 3 Pilot 模式 drone state 字段集
+- **给定**：Pilot 模式，飞行器为 Mavic 3E/3T，设备已上线
+- **当**：上线流程执行后，推送飞行器 state 到 `thing/product/{droneSn}/state`
+- **那么**：包含 pushMode=1 字段（Mavic 3 行业系列属性列表）：
+  - mode_code_reason（飞行器进入当前状态的原因，默认 0=无意义）
+  - dongle_infos（4G Dongle 信息 array）
+  - serious_low_battery_warning_threshold（严重低电量告警百分比）
+  - low_battery_warning_threshold（低电量告警百分比）
+  - control_source（当前控制源，默认 "A"）
+  - home_latitude / home_longitude（Home 点经纬度）
+  - firmware_upgrade_status（固件升级状态，默认 0=未升级）
+  - compatible_status（固件一致性，默认 0=不需要一致性升级）
+  - firmware_version（固件版本，默认 "0.0.0.0"）
+  - camera_watermark_settings（相机水印设置 struct）
+- **那么**：不包含 pushMode=0 字段（mode_code/cameras/country/gear 等在 OSD 主题上报）
+- **核实依据**：用户提供的 Mavic 3 行业系列设备属性列表（pushMode=1 字段集）
+- **实现**：使用 `Mavic3StateBuilder`（DroneStateBuilder 接口实现）
+
+#### TC-ONLINE-011：Matrice 4 系列（M4E/M4T）Pilot 模式 drone state 字段集
+- **给定**：Pilot 模式，飞行器为 M4E/M4T（DJI Matrice 4E/4T），设备已上线
+- **当**：上线流程执行后，推送飞行器 state 到 `thing/product/{droneSn}/state`
+- **那么**：包含 pushMode=1 字段（Matrice 4 系列属性列表第一部分+第二部分合并）：
+  - offline_map_enable（离线地图开关，默认 0=关闭）
+  - dongle_infos（4G Dongle 信息 array）
+  - current_rth_mode（返航高度模式当前值，默认 1=设定高度）
+  - rth_mode（返航高度模式设置值，默认 1=设定高度）
+  - serious_low_battery_warning_threshold（严重低电量告警百分比）
+  - low_battery_warning_threshold（低电量告警百分比）
+  - control_source（当前控制源，默认 "A"）
+  - home_latitude / home_longitude（Home 点经纬度）
+  - firmware_upgrade_status（固件升级状态，默认 0=未升级）
+  - compatible_status（固件一致性，默认 0=不需要一致性升级）
+  - mode_code_reason（飞行器进入当前状态的原因，默认 0=无意义）
+  - commander_flight_height（指点飞行高度，默认 100）
+  - commander_flight_mode（指点飞行模式设置值，默认 0=智能高度飞行）
+  - current_commander_flight_mode（指点飞行模式当前值，默认 0=智能高度飞行）
+  - commander_mode_lost_action（指点飞行失控动作，默认 0=继续执行）
+  - camera_watermark_settings（相机水印设置 struct）
+- **那么**：不包含顶层 `firmware_version`（Matrice 4 系列属性列表 firmware_version pushMode=0，在 OSD 主题上报）
+- **那么**：不包含 `payloads`/`wpmz_version`/`psdk_ui_resource`/`psdk_widget_values`（Matrice 4 系列属性列表未列）
+- **核实依据**：用户提供的 DJI Matrice 4 系列设备属性列表（pushMode=1 字段集，第一部分+第二部分合为完整列表）
+- **实现**：使用 `M4StateBuilder`（DroneStateBuilder 接口实现，M400/M4E/M4T 共用）
+
+> **架构说明**：Pilot 模式飞行器 state 字段集通过 `DroneStateBuilder` 接口按机型区分（与 OSD 的 `DroneOsdBuilder` 架构一致）。
+> `PilotOnlineService.publishDroneState()` 遍历所有 `DroneStateBuilder`，选择 `supports()` 返回 true 的进行构造。
+> 当前实现：`Mavic3StateBuilder`（Mavic 3E/3T）、`M4StateBuilder`（M400/M4E/M4T，三者 pushMode=1 字段集一致，共用）。
+
+#### TC-ONLINE-012：其他机型 Pilot 模式 drone OSD/state 字段集（待实现）
+- **状态**：待实现 — 机型范围已明确（M350 RTK / M300 RTK / M30 / M30T），待用户设计的全新 Pilot 模拟器页面（机型+相机组合选择）落地后实现
+- **"其他机型"定义**（DJI Cloud API 产品支持文档 + 用户确认）：
+  Pilot 上云（网关为遥控器）的所有机型，除去 Mavic 3 行业系列、DJI Matrice 4 系列、Matrice 400，剩余机型：
+  | 机型 | 网关 | domain/type/sub_type | DeviceType 状态 | 兼容相机（官方文档） |
+  |---|---|---|---|---|
+  | Matrice 350 RTK | DJI RC Plus | 0/89/0 | 已有枚举（M350_RTK） | H20/H20T/H20N/H30/H30T |
+  | Matrice 300 RTK | DJI RC Plus / 带屏遥控器行业版 | 0/60/0 | 已有枚举（M300_RTK） | H20/H20T/H20N/H30/H30T + Z30/XT2/XT S（仅带屏遥控器行业版） |
+  | Matrice 30 | DJI RC Plus | 0/67/0 | **缺失，待添加**（M30） | Matrice 30 Camera (52-0-0) |
+  | Matrice 30T | DJI RC Plus | 0/67/1 | **缺失，待添加**（M30T） | Matrice 30T Camera (53-0-0) |
+- **核实依据**：
+  1. 用户提供的"其他机型-飞行器"设备属性列表（pushMode=0 + pushMode=1 完整字段集）
+  2. DJI Cloud API 产品支持文档：https://developer.dji.com/doc/cloud-api-tutorial/cn/overview/product-support.html
+- **给定**：Pilot 模式，飞行器为 M350_RTK / M300_RTK / M30 / M30T 之一
+- **当**：上线流程执行后，推送飞行器 OSD 到 `thing/product/{droneSn}/osd`，推送 state 到 `thing/product/{droneSn}/state`
+- **那么**：OSD（pushMode=0）字段集 = Mavic 3 字段集 + `{type-subtype-gimbalindex}` 结构：
+  - Mavic 3 共有字段：country、mode_code(0-18)、cameras(含 ir_metering_*)、obstacle_avoidance、is_near_area_limit、is_near_height_limit、height_limit、night_lights_state、activation_time、maintain_status、total_flight_sorties、track_id、position_state(quality 1-5)、storage、battery、total_flight_distance、total_flight_time、wind_direction、wind_speed、home_distance、attitude_head、attitude_roll、attitude_pitch、elevation、height、latitude、longitude、vertical_speed、horizontal_speed、gear
+  - **新增**：`{type-subtype-gimbalindex}` 结构（以用户选择的相机负载索引为 key，含 gimbal_pitch/roll/yaw、measure_target_*、zoom_factor、thermal_*）
+  - thermal_* 字段按用户选择的相机是否为热成像相机条件上报（`ctx.isThermal()`）
+  - 可通过 `AbstractDroneOsdBuilder.buildPayload()` 构造（M30 已用此方式）
+  - **不含** distance_limit_status/rth_altitude（属性列表未列）
+- **那么**：state（pushMode=1）字段集 = Mavic 3 state 字段集 + 负载相关字段：
+  - Mavic 3 共有字段：mode_code_reason、dongle_infos、serious_low_battery_warning_threshold、low_battery_warning_threshold、control_source、home_latitude、home_longitude、firmware_upgrade_status、compatible_status、firmware_version(pushMode=1)、camera_watermark_settings
+  - **新增**：`{type-subtype-gimbalindex}.payload_index`（pushMode=1, r，值为用户选择的相机负载索引）
+  - **新增**：`{type-subtype-gimbalindex}.thermal_supported_palette_styles`（pushMode=1, r，仅热成像相机上报）
+- **待办项（实现前置）**：
+  1. **DeviceType**：添加 M30 (0/67/0)、M30T (0/67/1) 枚举值，包括默认 SN、默认相机类型
+  2. **PayloadType**：添加 M30_CAMERA(52-0-0)、M30T_CAMERA(53-0-0)、H20_CAMERA(42-0-0, compatible M350/M300)、H20T_CAMERA(43-0-0)、H20N_CAMERA(61-0-0)、H30_CAMERA(82-0-0)、H30T_CAMERA(83-0-0)，并补充 M350/M300 的 compatibleAircraft
+  3. **新建 Pilot 模拟器 UI 页面**：支持机型选择 + 相机组合选择 + 第三方平台登录等交互（用户确认需求）
+  4. **OtherDroneOsdBuilder**：新建，supports M350_RTK/M300_RTK/M30/M30T，OSD 字段集 = Mavic 3 字段 + `{type-subtype-gimbalindex}`
+  5. **OtherStateBuilder**：新建，supports 同上，state 字段集 = Mavic 3 state + `payload_index` + `thermal_supported_palette_styles`
+
+#### TC-ONLINE-013：其他 RC Pilot 模式遥控器 OSD/state 字段集（待实现）
+- **状态**：待实现 — 属性列表已完整核实（无第2段），等 Pilot 模拟器页面落地后统一实现
+- **"其他RC"定义**（DJI Cloud API 产品支持文档 + 用户确认）：
+  Pilot 上云支持的所有遥控器，除去 DJI RC Pro 行业版、DJI RC Plus 2 行业版，剩余遥控器（**用户确认包含 RC_PLUS**）：
+  | 遥控器 | domain/type/sub_type | DeviceType 状态 | 搭配飞行器 |
+  |---|---|---|---|
+  | DJI RC Plus | 2/119/0 | 已有（RC_PLUS） | M350 RTK / M300 RTK / M30 / M30T |
+  | DJI 带屏遥控器行业版 | 2/56/0 | **缺失，待添加** | M300 RTK |
+- **核实依据**：
+  1. 用户提供的"其他机型-飞行器"遥控器设备属性列表（完整，pushMode=0 + pushMode=1）
+  2. DJI Cloud API 产品支持文档：https://developer.dji.com/doc/cloud-api-tutorial/cn/overview/product-support.html
+- **OSD 字段（pushMode=0）核实**：
+  | 字段 | 属性列表 | 现有 RC_PLUS 实现（PilotControllerOsdBuilder） | 差异 |
+  |---|---|---|---|
+  | country | ✓ 有 | ✗ 无（仅 RC_PRO 上报） | **差异**：RC_PLUS 应上报 country |
+  | capacity_percent | ✓ 有 | ✓ 有 | 一致 |
+  | height | ✓ 有 | ✓ 有 | 一致 |
+  | wireless_link | ✓ 有 | ✓ 有 | 一致 |
+  | latitude | ✓ 有 | ✓ 有 | 一致 |
+  | longitude | ✓ 有 | ✓ 有 | 一致 |
+  | drc_state | ✗ 无 | ✗ 无 | 一致（RC_PLUS 不上报 drc_state） |
+- **state 字段（pushMode=1）核实**：
+  | 字段 | 属性列表 | 现有实现（PilotOnlineService） | 差异 |
+  |---|---|---|---|
+  | live_capacity | ✓ 有 | ✓ 有（publishLiveCapacity） | 一致 |
+  | dongle_infos | ✓ 有 | ✓ 有 | 一致 |
+  | live_status | ✓ 有 | ✓ 有 | 一致 |
+  | firmware_version | ✓ 有 | ✓ 有 | 一致 |
+  | cloud_control_auth | ✓ 有 | ✓ 有 | 一致 |
+- **差异汇总**：
+  1. **country 字段**：属性列表有，但现有 RC_PLUS 不上报（仅 RC_PRO 上报）。需修改 PilotControllerOsdBuilder 让 RC_PLUS 也上报 country。与之前核实 RC Plus 属性列表的结果（country 是 RC Pro 独有）不一致，**待实现时综合确认处理方式**。
+  2. **DJI 带屏遥控器行业版 (2/56/0)**：DeviceType 缺失，需添加枚举值（含默认 SN）。
+- **待办项（实现前置，与 TC-ONLINE-012 一起在 Pilot 模拟器页面落地后统一实现）**：
+  1. **DeviceType**：添加 DJI 带屏遥控器行业版 (2/56/0) 枚举值，包括默认 SN
+  2. **PilotControllerOsdBuilder**：确认 RC_PLUS 是否上报 country（待实现时综合确认）
+  3. 与 TC-ONLINE-012（其他机型-飞行器）一起统一实现
+
+#### TC-ONLINE-014：其他 RC Pilot 模式 update_topo 字段集核实
+- **状态**：已核实 — 字段结构一致，值差异已记录
+- **核实依据**：用户提供的"其他机型-遥控器"设备管理（update_topo）属性列表
+- **核实对象**：[PilotOnlineService.buildUpdateTopoData()](file:///d:/99.Code/hivemind-simulator/src/main/java/ltd/cdmi/hivemind/simulator/device/PilotOnlineService.java#L199-L226)
+- **字段结构核实**：完全一致 ✓
+  - 网关设备：domain(string)、type(int)、sub_type(int)、device_secret(text)、nonce(text)、thing_version(text)、sub_devices(array)
+  - 子设备：sn(text)、domain(string)、type(int)、sub_type(int)、index(string)、device_secret(text)、nonce(text)、thing_version(text)
+  - status_reply：result(int)，result=0 表示成功 ✓
+- **值差异**：
+  | 字段 | 现有实现 | 属性列表示例 | 处理方式 |
+  |---|---|---|---|
+  | domain | `controllerType.getDomain()` = "2"（遥控器类） | "3"（机场类） | **保持 "2"**（用户确认现有实现正确，DJI RC Plus 是遥控器 domain=2，属性列表示例 domain="3" 疑似 DJI 文档示例错误） |
+  | thing_version | "3.0.0.0"（硬编码，无 DJI 文档依据） | "1.1.2" | **先记录差异**，后续统一处理（thing_version 应改为可配参数，参考 AGENTS.md 第2条） |
+  | sub_devices.thing_version | "3.0.0.0" | "1.1.2" | 同上 |
+- **结论**：update_topo 字段结构与现有实现完全一致，无需修改。thing_version 的硬编码值 "3.0.0.0" 后续统一处理为可配参数。
+
+#### TC-ONLINE-015：其他 RC Pilot 模式直播功能核实
+- **状态**：已核实 — 4 个服务中 3 个一致，live_lens_change 差异保持现状
+- **核实依据**：用户提供的"其他机型-遥控器"直播功能属性列表
+- **核实对象**：[LiveStreamSimulator.java](file:///d:/99.Code/hivemind-simulator/src/main/java/ltd/cdmi/hivemind/simulator/handler/LiveStreamSimulator.java)
+- **服务核实**：
+  | 服务 | 属性列表 Data | 现有实现 | 差异 |
+  |---|---|---|---|
+  | live_start_push | url_type, url, video_id, video_quality | ✓ 一致 | 无 |
+  | live_stop_push | video_id | ✓ 一致 | 无 |
+  | live_set_quality | video_id, video_quality | ✓ 一致 | 无 |
+  | live_lens_change | video_id, video_type | 仅 video_type（无 video_id） | **差异（保持现状）** |
+- **live_lens_change 差异详情**：
+  1. **video_id 缺失**：属性列表 Data 包含 video_id 和 video_type，现有 [handleLensChange](file:///d:/99.Code/hivemind-simulator/src/main/java/ltd/cdmi/hivemind/simulator/handler/LiveStreamSimulator.java#L357-L367) 仅解析 video_type（全局更新所有推流）。用户确认保持现状（Dock 模式的 live_lens_change 只有 video_type）。
+  2. **video_type 枚举值**：属性列表为 `{"normal":"默认","thermal":"红外","wide":"广角","zoom":"变焦"}`，现有实现注释为 `normal/zoom/wide/ir`。差异：属性列表用 `thermal`，现有实现用 `ir`。保持现状。
+- **services_reply 结构**：
+  - live_lens_change：`{result: 0}`（Data 为 null，现有实现返回 `Map.of("result", 0)` ✓）
+  - live_set_quality / live_stop_push / live_start_push：`{result: 0}` ✓
+- **结论**：3 个服务完全一致，live_lens_change 存在差异（待后续处理）。
+  - **待修改项**：handleLensChange 需改为解析 video_id，按 video_id 精准切换镜头（与 handleSetQuality 一致），同时修正注释 `ir` → `thermal`
+  - **当前问题**：现有实现全局更新 video_type，无法体现 Pilot 模式 live_lens_change 的 video_id 差异
+
+#### TC-ONLINE-016：DJI RC Plus 2 行业版 update_topo 差异核实
+- **状态**：已核实 — 发现重要差异，待后续处理
+- **核实依据**：用户提供的"DJI RC Plus 2 行业版"设备管理（update_topo）属性列表
+- **核实对象**：[PilotOnlineService.buildUpdateTopoData()](file:///d:/99.Code/hivemind-simulator/src/main/java/ltd/cdmi/hivemind/simulator/device/PilotOnlineService.java#L199-L226) + [offline()](file:///d:/99.Code/hivemind-simulator/src/main/java/ltd/cdmi/hivemind/simulator/device/PilotOnlineService.java#L163-L183) + [publishStatus()](file:///d:/99.Code/hivemind-simulator/src/main/java/ltd/cdmi/hivemind/simulator/device/PilotOnlineService.java#L273)
+- **与其他 Pilot 机型（RC_PLUS/RC_PRO）的差异**：
+  | 维度 | 其他 Pilot 机型 | DJI RC Plus 2 行业版 | 现有实现（统一） |
+  |---|---|---|---|
+  | Topic | `sys/product/{gateway_sn}/status` | `thing/product/{gateway_sn}/status` | `sys/product/{sn}/status` |
+  | 网关设备 domain | ✓ 有 | ✗ 无 | ✓ 有 |
+  | 子设备 domain | ✓ 有 | ✗ 无 | ✓ 有 |
+  | 子设备 index | ✓ 有 | ✗ 无 | ✓ 有 |
+- **DJI RC Plus 2 行业版字段集**：
+  - 网关设备：type、sub_type、device_secret、nonce、thing_version、sub_devices（无 domain）
+  - 子设备：sn、type、sub_type、device_secret、nonce、thing_version（无 domain、无 index）
+- **现有实现问题**（对 DJI RC Plus 2 行业版）：
+  1. Topic 错误：用 `sys/product/{sn}/status`，应改为 `thing/product/{gateway_sn}/status`
+  2. 多了 domain：网关设备和子设备都不应包含 domain
+  3. 多了 index：子设备不应包含 index
+- **待修改项**：
+  1. **PilotOnlineService**：根据 controllerType 判断是否为 RC_PLUS_2，差异化构造 update_topo 报文
+     - RC_PLUS_2：Topic 用 `thing/product/{sn}/status`，网关设备和子设备不包含 domain，子设备不包含 index
+     - 其他机型：保持现状（`sys/product/{sn}/status` + domain + index）
+  2. **TopicConstants**：可能需要新增 `THING_STATUS` 常量（`thing/product/%s/status`）
+  3. **publishStatus()**：根据 controllerType 选择 Topic
+- **结论**：DJI RC Plus 2 行业版的 update_topo 协议与其他 Pilot 机型有重要差异（新一代遥控器协议变更），现有实现需差异化处理，待后续统一实现。
+
+#### TC-ONLINE-017：Pilot/Dock Topic 结构分离
+- **状态**：已实现 — Pilot 部分（5 处），Dock 部分待后续迁移
+- **背景**：Pilot 上云（RC 作为网关）和机场上云（机场作为网关）的 MQTT Topic 结构应分离，即使两者 100% 一样，也应从共同结构继承扩展
+- **实现方案**：接口 + 默认方法模式
+  - [TopicSchema](file:///d:/99.Code/hivemind-simulator/src/main/java/ltd/cdmi/hivemind/simulator/mqtt/TopicSchema.java)（接口）：定义所有 Topic 通道，差异点（status/statusReply）为抽象方法，其他通道为默认实现（thing/product/%s/...）
+  - [PilotTopicSchema](file:///d:/99.Code/hivemind-simulator/src/main/java/ltd/cdmi/hivemind/simulator/mqtt/PilotTopicSchema.java)（Pilot 上云）：实现 TopicSchema，按遥控器型号区分 status/statusReply
+    - DJI RC Plus / RC Pro 行业版：sys/product/%s/status
+    - DJI RC Plus 2 行业版：thing/product/%s/status
+  - DockTopicSchema（机场上云）：待后续创建
+- **已修改文件**：
+  - [PilotOnlineService.java](file:///d:/99.Code/hivemind-simulator/src/main/java/ltd/cdmi/hivemind/simulator/device/PilotOnlineService.java)：注入 TopicSchema 字段，构造函数创建 PilotTopicSchema，5 处 TopicConstants 引用改为 topicSchema
+- **Topic 通道差异**：
+  | Topic 通道 | Dock 上云 | Pilot 上云（其他机型） | Pilot 上云（RC Plus 2） |
+  |---|---|---|---|
+  | status | sys/product/%s/status | sys/product/%s/status | thing/product/%s/status |
+  | status_reply | sys/product/%s/status_reply | sys/product/%s/status_reply | thing/product/%s/status_reply |
+  | osd/state/services/... | thing/product/%s/... | thing/product/%s/... | thing/product/%s/... |
+- **待办项**：
+  1. 创建 DockTopicSchema，将 Dock 上云相关类（约 45 处）从 TopicConstants 迁移到 DockTopicSchema
+  2. 废弃 TopicConstants（迁移完成后）
+  3. DJI RC Plus 2 行业版的 status_reply Topic 待真机验证（暂与 status 保持一致）
+
+#### TC-ONLINE-018：DJI RC Plus 2 行业版直播功能差异核实
+- **状态**：已核实 — 发现重要差异，待后续处理
+- **核实依据**：用户提供的"DJI RC Plus 2 行业版"直播功能属性列表
+- **核实对象**：[LiveStreamSimulator.java](file:///d:/99.Code/hivemind-simulator/src/main/java/ltd/cdmi/hivemind/simulator/handler/LiveStreamSimulator.java)
+- **与其他 Pilot 机型（RC_PLUS/RC_PRO）的差异**：
+  | 维度 | 其他 Pilot 机型 | DJI RC Plus 2 行业版 |
+  |---|---|---|
+  | 设置直播镜头 Method | `live_lens_change` | `drc_live_lens_change` |
+  | 设置直播镜头 Topic | `thing/product/{gateway_sn}/services` | `thing/product/{gateway_sn}/drc/down` |
+  | 设置直播镜头 Reply Topic | `services_reply` | `thing/product/{gateway_sn}/drc/up` |
+  | 设置直播镜头 Data | video_id + video_type | **payload_index** + video_type |
+  | video_type 枚举 | normal/thermal/wide/zoom | thermal/wide/zoom（**无 normal**） |
+  | live_start_push url_type | 0/1/3（Agora/RTMP/GB28181） | 0/1/3/**4**（+WebRTC） |
+- **一致部分** ✓：
+  - `live_set_quality`（services，video_id + video_quality）
+  - `live_stop_push`（services，video_id）
+  - `live_start_push`（services，url_type + url + video_id + video_quality，但 url_type 多了 WebRTC）
+- **现有实现问题**：
+  1. LiveStreamSimulator 没有 `drc_live_lens_change` 处理（RC Plus 2 的设置直播镜头走 DRC 通道）
+  2. `live_lens_change` 差异已在 TC-ONLINE-015 记录（待修改为按 video_id 精准切换）
+  3. `live_start_push` 不支持 WebRTC（url_type=4）
+  4. `video_type` 枚举值不正确（现有用 `ir`，应为 `thermal`）
+- **关键差异分析**：
+  - DJI RC Plus 2 行业版的"设置直播镜头"走 **DRC 通道**（`drc/down` + `drc/up`），而非 services 通道
+  - 使用 `payload_index`（相机枚举）而非 `video_id`（直播视频流 ID）
+  - `video_type` 无 `normal`（只有 thermal/wide/zoom）
+- **待修改项**（后续统一实现）：
+  1. **LiveStreamSimulator**：新增 `drc_live_lens_change` 处理（监听 `drc/down`，回复 `drc/up`，解析 payload_index + video_type）
+  2. **live_start_push**：支持 WebRTC（url_type=4）
+  3. **video_type 枚举**：修正 `ir` → `thermal`（与 TC-ONLINE-015 合并处理）
+  4. 根据 controllerType 判断是否为 RC_PLUS_2，差异化处理直播镜头切换指令
+- **结论**：DJI RC Plus 2 行业版的直播功能与其他 Pilot 机型有重要差异（DRC 通道 + payload_index + WebRTC），现有实现需差异化处理，待后续统一实现。
 
 ### 2.4 配置管理
 
@@ -676,6 +975,19 @@ TDD（测试驱动开发）是本项目的标准开发方式：
   - [M30 properties](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/aircraft/m30-properties.html)：含 `payloads`，无 `wireless_link_topo`/`type_subtype_gimbalindex`
 - **错误后果**：M30 上报 `wireless_link_topo` 或 `type_subtype_gimbalindex` 会导致平台解析异常
 
+#### TC-BUILDER-002-A：M400 DroneOsdBuilder 选择与字段集（Pilot 模式）
+- **给定**：drone-type=M400（Matrice 400，Pilot 模式）
+- **当**：上报飞行器 OSD
+- **那么**：使用 M400DroneOsdBuilder（supports M400）
+- **那么**：字段集包含 `type_subtype_gimbalindex`（简化版：gimbal_pitch/roll/yaw + payload_index + zoom_factor），无 `cameras`、无 `measure_target_*`、无 `thermal_*`
+- **那么**：包含 `mode_code`/`gear`/`firmware_version`（pushMode=0，M400 Pilot 属性列表第二部分确认）
+- **那么**：不包含 `distance_limit_status`/`rth_altitude`（M400 Pilot 属性列表未列，includeDistanceLimitFields=false）
+- **那么**：`type_subtype_gimbalindex.payload_index` = "82-0-0"（H30 相机，M400 默认搭载 H30，DJI 产品支持文档）
+- **那么**：共用字段（latitude/longitude/height/elevation/attitude_*/speed_*/battery/position_state/storage/maintain_status/obstacle_avoidance/is_near_*/height_limit/night_lights_state/activation_time/total_flight_*/track_id/wind_*/home_distance/mode_code/gear/firmware_version）由基类提供
+- **核实依据**：用户提供的 M400 Pilot 设备属性列表（pushMode=0 字段集，第一部分+第二部分合为完整列表）；[DJI 产品支持](https://developer.dji.com/doc/cloud-api-tutorial/cn/overview/product-support.html) M400 搭载 H30/H30T
+- **错误后果**：M400 上报 `cameras`/`measure_target_*`/`thermal_*` 或 `distance_limit_status`/`rth_altitude` 会偏离 M400 Pilot 属性列表
+- **修正记录**：第一部分曾错误排除 mode_code/gear（属性列表第一部分未列），第二部分确认 pushMode=0 后已修正
+
 #### TC-BUILDER-003：红外字段按机型 sub_type 条件上报
 - **给定**：drone-type=M4TD（sub_type=1，含红外相机）
 - **当**：上报飞行器 OSD 的 `cameras` 数组
@@ -820,6 +1132,26 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **那么**：M30 负载属性（旧版方式）：以负载索引（{type-subtype-gimbalIndex}）为 key 的 struct，包含 gimbal_pitch/roll/yaw + measure_target_* + zoom_factor + thermal_*（仅 thermal 机型）；`payload_index` 是 pushMode=1（state topic），不在 OSD 中；`version` 字段文档中不存在，不上报
   - M30→`52-0-0`，M30T→`53-0-0`，M3D→`80-0-0`，M3TD→`81-0-0`
   - 参考DJI 产品支持页面相机枚举值 + 设备属性推送示例
+
+#### TC-BUILDER-015：Mavic 3 DroneOsdBuilder 选择与字段集（Pilot 模式）
+- **给定**：drone-type=MAVIC_3E 或 MAVIC_3T（Mavic 3 行业系列，Pilot 模式）
+- **当**：上报飞行器 OSD
+- **那么**：使用 Mavic3DroneOsdBuilder（supports MAVIC_3E/MAVIC_3T）
+- **那么**：字段集包含 `country`（国家区域码，Mavic 3 独有）+ `cameras`（完整相机数组，含广角/变焦/红外参数）
+- **那么**：cameras 的 payload_index 为 `66-0-0`（Mavic 3E Camera）或 `67-0-0`（Mavic 3T Camera）
+- **那么**：Mavic 3T（sub_type=1）的 cameras 包含 ir_zoom_factor/ir_metering_point/ir_metering_area（红外测温字段）
+- **那么**：不包含 `distance_limit_status`/`rth_altitude`（Mavic 3 属性列表未列，覆盖 includeDistanceLimitFields=false）
+- **那么**：不包含 `firmware_version`（Mavic 3 的 firmware_version 是 pushMode=1，在 state topic 上报）
+- **那么**：不包含 `type_subtype_gimbalindex`（Mavic 3 属性列表未列）
+- **核实依据**：用户提供的 Mavic 3 行业系列设备属性列表（pushMode=0 字段集）+ DJI 产品支持文档相机枚举值
+
+#### TC-BUILDER-016：M4E/M4T 复用 M400 DroneOsdBuilder（Pilot 模式）
+- **给定**：drone-type=M4E 或 M4T（DJI Matrice 4E/4T，Pilot 模式）
+- **当**：上报飞行器 OSD
+- **那么**：使用 M400DroneOsdBuilder（supports M400/M4E/M4T，属性列表字段集完全一致）
+- **那么**：type_subtype_gimbalindex.payload_index 为 `88-0-0`（M4E Camera）或 `89-0-0`（M4T Camera）
+- **那么**：字段集与 M400 完全一致（简化版 type_subtype_gimbalindex，无 cameras，无 distance_limit_status/rth_altitude）
+- **核实依据**：用户提供的 DJI Matrice 4 系列设备属性列表（第一部分，与 M400 完全一致）+ DJI 产品支持文档相机枚举值
 - **那么**：M4D 负载属性（升级方式）：`measure_target_*` 字段在 `type_subtype_gimbalindex` struct 下，不以负载索引为 key
   - M4D→`98-0-0`，M4TD→`99-0-0`（作为 `type_subtype_gimbalindex.payload_index` 的值）
   - `measure_target_error_state` 枚举：0=NORMAL, 1=TOO_CLOSE, 2=TOO_FAR, 3=NO_SIGNAL；模拟器用 3=NO_SIGNAL（M30/M4D 统一）
@@ -2177,7 +2509,7 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 > - Service 下行：`flighttask_prepare`/`flighttask_execute`/`flighttask_pause`/`flighttask_recovery`/`flighttask_undo`/`flighttask_stop`/`return_home`/`return_home_cancel`/`return_specific_home`/`flight_setup_abort`
 > - Event 上行：`flighttask_progress`/`return_home_info`/`flighttask_ready`/`device_exit_homing_notify`/`in_flight_wayline_progress`/`flight_setup_exception_notify`
 >
-> 核实依据：[Dock3 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) | [Dock2 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/wayline.html) | [Dock1 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html)
+> 核实依据：[Dock1/Dock2/Dock3 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) | [Dock2 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/wayline.html) | [Dock1 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html)
 
 #### TC-WAYLINE-001：flighttask_prepare 回复 + 机场状态更新
 - **给定**：云端下发 `flighttask_prepare`（含 `flight_id`、`file.url`）
@@ -2258,7 +2590,7 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **当**：模拟器执行任务
 - **那么**：时序为 `flighttask_prepare`（reply）→ `flighttask_execute`（reply）→ `flighttask_progress`×N（in_progress）→ `flighttask_progress`（ok）→ `return_home_info` → 媒体上传流程
 - **那么**：每个 `flighttask_progress` 的 `bid` 与 `flighttask_execute` 的 `bid` 一致（hivemind 据此关联任务）
-- **核实依据**：[Dock3 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) 完整交互流程
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) 完整交互流程
 
 #### TC-WAYLINE-011：任务完成后触发媒体上传
 - **给定**：`flighttask_progress` 上报 `status=ok`
@@ -2268,14 +2600,38 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **核实依据**：[设计文档 §5.3 航线任务流程](superpowers/specs/2026-08-08-dji-dock-simulator-design.md) 步骤 4-5
 
 #### TC-WAYLINE-012：current_step 步骤编号 Dock1 vs Dock2/3 不同 ⚠️
+- **归属差异**：三版本 current_step 枚举存在偏移。Dock2/3 比 Dock1 多"图传远程对频"(step8)和"起飞机场检查降落机场"(step22)两步；此外 Dock2 缺"航线执行中"(step25)，Dock3 保留 step25
+- **模拟器策略**：选择 6 个关键步骤（开机→起飞→返航检查→降落→退出工作模式→通知结果），不含"航线执行中"以保证三版本 stepIndex 语义一致。状态更新按 stepIndex（非 step 值），三版本通用
 - **给定**：dock-type=DOCK1
 - **当**：上报 `flighttask_progress`
-- **那么**：`current_step` 使用 Dock1 编号：`7`（开机检查）→ `22`（触发执行航线）→ `23`（航线执行中）→ `25`（降落）→ `26`（关盖）→ `33`（通知任务结果）
+- **那么**：`current_step` 使用 Dock1 编号序列：`7`(开机检查)→`22`(触发执行航线)→`24`(进入返航检查)→`25`(降落机场)→`27`(退出工作模式)→`33`(通知任务结果)
 - **给定**：dock-type=DOCK2 或 DOCK3
-- **那么**：`current_step` 使用 Dock2/3 编号：`7`（开机检查）→ `24`（触发执行航线）→ `25`（航线执行中）→ `27`（降落）→ `28`（关盖）→ `35`（通知任务结果）
-- **差异原因**：Dock2/3 在 step 8（图传远程对频）和 step 22（起飞机场检查降落机场准备状态）各插入一个新步骤，导致后续编号偏移 +2
-- **错误后果**：Dock1 用 Dock2/3 的 step 编号会导致平台误判任务阶段
-- **核实依据**：[Dock1 wayline.html current_step 枚举](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html) vs [Dock3 wayline.html current_step 枚举](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html)
+- **那么**：`current_step` 使用 Dock2/3 编号序列：`7`(开机检查)→`24`(触发执行航线)→`26`(进入返航检查)→`27`(降落机场)→`29`(退出工作模式)→`35`(通知任务结果)
+- **错误后果**：Dock1 用 Dock2/3 的 step 编号会导致平台误判任务阶段（如 Dock1 的 24=返航检查，在 Dock3 下 24=触发执行航线）
+- **核实依据**：[Dock1 wayline.html current_step 枚举](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html) | [Dock2 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/wayline.html) | [Dock1/Dock2/Dock3 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html)
+
+#### TC-WAYLINE-012b：break_reason 型号校验 ⚠️
+- **归属差异**：break_reason 枚举仅 528/529 两个值存在型号差异，其余值（含 1565=航线避障紧急刹停）三版本一致
+  - 528=接近用户自定义飞行区边界：仅 Dock1
+  - 529=有障碍物或者禁飞区域，导致航线无法到达：仅 Dock2
+  - 1565=航线避障紧急刹停：三版本共有
+- **给定**：dock-type=DOCK1
+- **当**：调用 `publishProgressFailedWithBreakReason(528)`
+- **那么**：528 在 Dock1 合法，发送 flighttask_progress(failed)，返回 true
+- **给定**：dock-type=DOCK2
+- **当**：调用 `publishProgressFailedWithBreakReason(529)`
+- **那么**：529 在 Dock2 合法，发送 flighttask_progress(failed)，返回 true
+- **给定**：dock-type=DOCK1 或 DOCK3
+- **当**：调用 `publishProgressFailedWithBreakReason(529)`
+- **那么**：529 在 Dock1/Dock3 非法，拒绝发送（P-8 型号能力不匹配），返回 false
+- **给定**：dock-type=DOCK2 或 DOCK3
+- **当**：调用 `publishProgressFailedWithBreakReason(528)`
+- **那么**：528 在 Dock2/Dock3 非法，拒绝发送，返回 false
+- **给定**：任意 dock-type
+- **当**：调用 `publishProgressFailedWithBreakReason(1565)`
+- **那么**：1565 三版本共有，均合法，返回 true
+- **默认值**：未传 break_reason 时按型号选默认（Dock1=528/Dock2=529/Dock3=517）
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html break_reason 枚举](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html) ext.break_point.break_reason 字段
 
 #### TC-WAYLINE-013：flighttask_stop 仅 Dock2/3 支持
 - **给定**：dock-type=DOCK1
@@ -2318,13 +2674,14 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **说明**：当前未实现，作为后续实现依据
 - **核实依据**：[Dock3 wayline.html 任务就绪通知](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) Event 结构
 
-#### TC-WAYLINE-018：device_exit_homing_notify 事件（返航退出状态通知，未实现）
+#### TC-WAYLINE-018：device_exit_homing_notify 事件（返航退出状态通知）
+- **归属**：Dock1/Dock2/Dock3 通用（已核实三 Dock wayline 文档均存在）
 - **给定**：机场处于返航模式，因异常退出返航
 - **当**：模拟器上报 `device_exit_homing_notify`
-- **那么**：事件含 `method=device_exit_homing_notify`、`need_reply=1`、`data.sn`/`data.action`（0=退出/1=进入）/`data.reason`（退出原因枚举）
+- **那么**：事件含 `method=device_exit_homing_notify`、`need_reply=1`、`data.sn`/`data.action`（enum_int，0=退出/1=进入）/`data.reason`（enum_int，0-10 退出原因）
 - **那么**：等待云端 events_reply（tid 匹配，result=0）后才算完成
-- **说明**：当前未实现，作为后续实现依据
-- **核实依据**：[Dock3 wayline.html 设备返航退出状态通知](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) Event 结构
+- **字段决策（M-2 待真机验证）**：`reason` 字段 DJI 文档定义为 enum_int，但 Example 中为字符串 `"0"`。当前按字段定义用 int 类型，待真机验证
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html 设备返航退出状态通知](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html) Event 结构
 
 #### TC-WAYLINE-019：in_flight_wayline_progress 事件（空中航线状态，Dock2/3，未实现）
 - **给定**：dock-type=DOCK2 或 DOCK3，空中航线任务执行中
@@ -2334,12 +2691,14 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **说明**：当前未实现，作为后续实现依据
 - **核实依据**：[Dock3 wayline.html 空中下发航线状态上报](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) Event 结构
 
-#### TC-WAYLINE-020：flight_setup_exception_notify 事件（准备异常通知，Dock1，未实现）
-- **给定**：dock-type=DOCK1，任务准备阶段异常
+#### TC-WAYLINE-020：flight_setup_exception_notify 事件（准备异常通知，Dock1 专有）
+- **归属**：仅 Dock1（已核实 Dock2/Dock3 wayline 文档目录均无此 event）
+- **给定**：dock-type=DOCK1，航线任务或指令飞行任务准备阶段异常
 - **当**：模拟器上报 `flight_setup_exception_notify`
-- **那么**：事件含 `method=flight_setup_exception_notify`、`need_reply=1`、`data.sn`/`data.timeout_time`（2-10 分钟）/`data.timestamp`/`data.flight_type`（1=航线/2=指令飞行）
+- **那么**：事件含 `method=flight_setup_exception_notify`、`need_reply=1`、`data.flight_id`/`data.flight_type`（int，1=航线任务/2=指令飞行任务）/`data.sn`/`data.timeout_time`（int，min2/max10/step2，分钟）/`data.timestamp`（double，当前UTC时间）
 - **那么**：等待云端 events_reply（tid 匹配，result=0）后才算完成
-- **说明**：当前未实现，作为后续实现依据
+- **那么**：dock-type=DOCK2/DOCK3 调用时拒绝上报（P-8 型号能力不匹配），返回未发送
+- **字段决策（M-2 待真机验证）**：`flight_id` 在 DJI 文档 Data 表未列出，但 Example 中包含。按 Example 包含 `flight_id`（优先取传入值，否则 fallback 当前任务 `currentFlightId`，再否则空串），待真机验证平台是否需要该字段关联任务
 - **核实依据**：[Dock1 wayline.html 机场任务准备异常通知](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html) Event 结构
 
 #### TC-WAYLINE-021：flighttask_undo vs flighttask_stop 语义区分
@@ -2406,13 +2765,14 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 
 #### TC-LOC-005：无人机位置随飞行步骤更新
 - **给定**：`flighttask_execute` 触发任务执行
-- **当**：进度推进到 `current_step=24`（起飞）
+- **说明**：状态更新按 stepIndex（非 current_step 值），三版本通用。详见 [TC-WAYLINE-012](#tc-wayline-012current_step-步骤编号-dock1-vs-dock23-不同-)
+- **当**：进度推进到 `stepIndex=1`（起飞）
 - **那么**：`droneLatitude=机场纬度, droneLongitude=机场经度, droneHeight=0`
-- **当**：进度推进到 `current_step=25`（航线执行中）
+- **当**：进度推进到 `stepIndex=2`（返航检查）
 - **那么**：`droneLatitude=机场纬度+0.001, droneLongitude=机场经度+0.001, droneHeight=50`（相对机场偏移约 100 米）
-- **当**：进度推进到 `current_step=27`（降落机场）
+- **当**：进度推进到 `stepIndex=3`（降落）
 - **那么**：`droneLatitude=机场纬度, droneLongitude=机场经度, droneHeight=20`
-- **当**：进度推进到 `current_step=28`（关盖）
+- **当**：进度推进到 `stepIndex=4`（退出工作模式）
 - **那么**：`droneLatitude=机场纬度, droneLongitude=机场经度, droneHeight=0`
 - **height 字段语义**：相对起飞点高度（与用户期望一致）
 
@@ -2681,20 +3041,37 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 
 #### TC-PILOT-013：云控授权流程
 - **给定**：Pilot 模式下，设备已上线
-- **当**：平台下发 `cloud_control_auth_request`（Service Topic）
+- **当**：平台下发 `cloud_control_auth_request`（Service Topic），data 含 `user_id`
 - **那么**：模拟器自动同意授权（模拟用户在遥控器上点击同意）
 - **那么**：通过 services_reply 回复 result=0
-- **那么**：通过 events Topic 上报 `cloud_control_auth_notify`（status=ok）
-- **那么**：通过 State Topic 上报 `cloud_control_auth` 授权列表
+- **那么**：通过 events Topic 上报 `cloud_control_auth_notify`（result=0, output.status=ok）
+- **那么**：通过 State Topic 上报 `cloud_control_auth`（授权列表非空，含已授权控制权）
 - **核实依据**：[DJI Pilot DRC-云控授权](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/drc.html)，Pilot 特有流程，Dock 不需要
 - **错误后果**：不实现授权流程会导致平台无法获取控制权
+- **说明**：cloud_control_auth 的具体值（control_keys 列表）DJI 文档未明确示例，模拟器采用简化策略——auth_request 成功后置为 ["flight"]，待真机验证
 
 #### TC-PILOT-014：云控授权释放
 - **给定**：Pilot 模式下，云控已授权
-- **当**：平台下发 `cloud_control_release`（Service Topic）
+- **当**：平台下发 `cloud_control_release`（Service Topic），data 含 `control_keys`（如 ["flight"]）
 - **那么**：通过 services_reply 回复 result=0
-- **那么**：更新 `cloud_control_auth` 状态为未授权
+- **那么**：通过 State Topic 上报 `cloud_control_auth`（清空为空数组）
 - **核实依据**：[DJI Pilot DRC-释放授权](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/drc.html)
+
+#### TC-PILOT-014a：drc_mode_enter 解析 MQTT broker 信息
+- **给定**：Pilot 模式下，云控已授权
+- **当**：平台下发 `drc_mode_enter`（Service Topic），data 含 `mqtt_broker`（address/username/password/client_id/expire_time/enable_tls）、`hsi_frequency`、`osd_frequency`
+- **那么**：通过 services_reply 回复 result=0
+- **那么**：解析并记录 `mqtt_broker` 连接信息（供平台建立 DRC 专用连接，模拟器继续使用现有连接）
+- **那么**：设 drcState=2，通过 state 上报 drc_state=2
+- **核实依据**：[DJI Pilot DRC-指令飞行](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/drc.html)
+- **说明**：`mqtt_broker` 信息供平台端建立 DRC 专用 MQTT 连接，模拟器作为设备端继续使用现有连接，记录 M-2 诊断日志
+
+#### TC-PILOT-014b：drc_mode_exit 退出 DRC 模式
+- **给定**：Pilot 模式下，DRC 模式已激活（drcState=2）
+- **当**：平台下发 `drc_mode_exit`（Service Topic）
+- **那么**：通过 services_reply 回复 result=0
+- **那么**：设 drcState=0，通过 state 上报 drc_state=0
+- **核实依据**：[DJI Pilot DRC-指令飞行](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/drc.html)
 
 #### TC-PILOT-015：fly_to_point 指令处理
 - **给定**：Pilot 模式下，云控已授权，DRC 模式已进入
@@ -2730,12 +3107,723 @@ TDD（测试驱动开发）是本项目的标准开发方式：
 - **那么**：Pilot 模式不模拟 HMS 告警（Dock 独有功能）
 - **核实依据**：[DJI Pilot 功能集](https://developer.dji.com/doc/cloud-api-tutorial/cn/feature-set/pilot-feature-set/pilot-access-to-cloud.html)，Pilot 不支持 HMS、远程调试、固件升级等 Dock 独有功能
 
-#### TC-PILOT-020：Pilot 模式 DRC 心跳
+#### TC-PILOT-020：Pilot 模式 DRC 心跳响应
 - **给定**：Pilot 模式下，DRC 模式已进入
-- **当**：DRC 心跳周期触发
-- **那么**：通过 DRC Topic（`drc/up`）发送 `heart_beat` 消息
-- **那么**：消息包含 `timestamp` 和 `seq` 字段
-- **核实依据**：[DJI Pilot DRC-心跳](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/drc.html)，超过 1 分钟未收到心跳，设备退出 DRC 链路
+- **当**：平台通过 DRC Topic（`drc/down`）发送 `heart_beat` 消息
+- **那么**：设备通过 DRC Topic（`drc/up`）响应 `heart_beat`（回显 seq + timestamp）
+- **核实依据**：[DJI Pilot DRC-指令飞行](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/mqtt/dji-rc-plus-2/drc.html)，DJI 官方文档未明确定义 heart_beat 协议格式和发起方，仅在废弃的 drc_status_notify 注释中提到"DRC-心跳"可感知链路状态。现有 DrcCommandHandler 采用请求-响应模式（平台 drc/down → 设备 drc/up）
+
+### 2.25 AirSense 告警通知（wayline.html）
+
+#### TC-AIRSENSE-001：airsense_warning 事件结构
+- **给定**：Dock 已上线，MQTT 已连接
+- **当**：调用 `trigger(List<AirSenseAlert>)` 触发 AirSense 告警
+- **那么**：通过 events Topic 发送 `method=airsense_warning` 事件
+- **那么**：`need_reply=1`（AirSense 需平台回复）
+- **那么**：`data` 直接是**数组**（非对象包裹，与 HMS 的 `data.list` 不同）
+- **核实依据**：[Dock1 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html) Event airsense_warning
+
+#### TC-AIRSENSE-002：告警字段完整性
+- **给定**：触发一个 AirSense 告警
+- **那么**：data 数组每个元素包含 10 个字段：
+  - `icao`（text, ICAO 飞机地址）
+  - `warning_level`（enum_int 0-4, ≥3 建议避让）
+  - `latitude`/`longitude`（float, 飞机位置）
+  - `altitude`（int, 绝对高度米）
+  - `altitude_type`（enum_int 0=椭球高/1=海拔高）
+  - `heading`（float, 航向角度）
+  - `relative_altitude`（int, 航班相对无人机高度米）
+  - `vert_trend`（enum_int 0=不变/1=上升/2=下降）
+  - `distance`（int, 航班与无人机水平距离米）
+- **核实依据**：同上
+
+#### TC-AIRSENSE-003：多航班一次上报
+- **给定**：触发包含 2 个航班的告警列表
+- **那么**：data 数组包含 2 个元素，count=2
+- **说明**：DJI 协议 data 为数组，支持一次上报多个航班告警
+
+#### TC-AIRSENSE-004：空列表拒绝
+- **给定**：调用 `trigger(List.of())` 或 `trigger(null)`
+- **那么**：返回 `success=false, code=INVALID_ALERTS`，不发送 MQTT 消息
+
+#### TC-AIRSENSE-005：MQTT 未连接拒绝
+- **给定**：MQTT 未连接
+- **那么**：返回 `success=false, code=MQTT_NOT_CONNECTED`，不发送 MQTT 消息
+
+### 2.26 自定义飞行区（Dock2/Dock3 wayline.html）
+
+> 核实依据：[Dock2 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock2/wayline.html)、[Dock1/Dock2/Dock3 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) 自定义飞行区（flight_areas_drone_location / flight_areas_sync_progress / flight_areas_update / flight_areas_get）
+
+#### TC-FLIGHTAREA-001：flight_areas_drone_location 事件结构
+- **给定**：Dock 已上线，MQTT 已连接
+- **当**：调用 `triggerDroneLocation(List<DroneLocation>)` 触发飞行器位置告警
+- **那么**：通过 events Topic 发送 `method=flight_areas_drone_location` 事件
+- **那么**：`need_reply=0`（单向通知，不需平台回复）
+- **那么**：`data` 是对象，包含 `drone_locations` 数组（非 data 直接为数组）
+- **核实依据**：同上 Event flight_areas_drone_location
+
+#### TC-FLIGHTAREA-002：drone_location 字段完整性
+- **给定**：触发一个飞行器位置告警
+- **那么**：`data.drone_locations` 数组每个元素包含 3 个字段：
+  - `area_distance`（float, 距离飞行边界距离）
+  - `area_id`（string, 区域唯一 ID，Dock2 表格明确列出，Dock3 表格遗漏但 Example 包含，已交叉验证）
+  - `is_in_area`（bool, 是否在自定义飞行区内）
+- **核实依据**：Dock2/Dock3 wayline.html Example
+
+#### TC-FLIGHTAREA-003：多区域一次上报
+- **给定**：触发包含 2 个飞行区的位置告警列表
+- **那么**：`data.drone_locations` 数组包含 2 个元素，count=2
+
+#### TC-FLIGHTAREA-004：空列表拒绝
+- **给定**：调用 `triggerDroneLocation(List.of())` 或 `triggerDroneLocation(null)`
+- **那么**：返回 `success=false, code=INVALID_LOCATIONS`，不发送 MQTT 消息
+
+#### TC-FLIGHTAREA-005：flight_areas_sync_progress 事件结构
+- **给定**：Dock 已上线，MQTT 已连接
+- **当**：调用 `triggerSyncProgress(status, reason, file)` 触发同步进度上报
+- **那么**：通过 events Topic 发送 `method=flight_areas_sync_progress` 事件
+- **那么**：`need_reply=1`（需平台回复）
+- **那么**：`data` 是对象，包含 `status`（enum_string）、`reason`（int）、`file`（struct）
+- **核实依据**：同上 Event flight_areas_sync_progress
+
+#### TC-FLIGHTAREA-006：sync_progress status 枚举值
+- **给定**：触发同步进度上报
+- **那么**：`status` 取值范围为 `fail`/`switch_fail`/`synchronized`/`synchronizing`/`wait_sync`
+- **那么**：成功时 `reason=0`，失败时 `reason` 为 1-13 对应失败原因
+- **核实依据**：同上 status/reason 枚举定义
+
+#### TC-FLIGHTAREA-007：sync_progress file 字段结构
+- **给定**：触发同步进度上报，传入文件信息
+- **那么**：`data.file` 包含 `name`（文件名）和 `checksum`（SHA256 签名）
+
+#### TC-FLIGHTAREA-008：flight_areas_get 请求结构
+- **给定**：Dock 已上线，MQTT 已连接
+- **当**：调用 `requestFlightAreas()` 发起文件获取
+- **那么**：通过 requests Topic 发送 `method=flight_areas_get` 请求
+- **那么**：`data=null`
+- **那么**：等待 requests_reply，返回 reply 内容（含 `result` 和 `output.files`）
+- **核实依据**：同上 Requests flight_areas_get
+
+#### TC-FLIGHTAREA-009：flight_areas_get 超时处理
+- **给定**：发起 flight_areas_get 请求后，平台未在超时时间内回复
+- **那么**：返回 `success=false, code=REPLY_TIMEOUT`，不阻塞调用线程
+- **说明**：超时时间复用项目约定（10 秒）
+
+#### TC-FLIGHTAREA-010：flight_areas_update service 应答
+- **给定**：平台下发 `flight_areas_update` 指令到 services Topic
+- **当**：ServiceCommandHandler 收到指令
+- **那么**：回复 services_reply，`data.result=0`
+- **核实依据**：同上 Service flight_areas_update
+
+#### TC-FLIGHTAREA-011：flight_areas_update 自动联动 flight_areas_get
+- **给定**：平台下发 `flight_areas_update` 指令
+- **当**：ServiceCommandHandler 处理完毕（回 result=0）
+- **那么**：自动发起 `flight_areas_get` requests 请求（对齐真机推断行为：平台通知更新→设备主动拉取）
+- **说明**：DJI 文档未明确 update 与 get 的联动关系，此为合理推断，记录 M-2 诊断日志
+
+#### TC-FLIGHTAREA-012：MQTT 未连接拒绝
+- **给定**：MQTT 未连接
+- **当**：调用 `triggerDroneLocation` / `triggerSyncProgress` / `requestFlightAreas`
+- **那么**：返回 `success=false, code=MQTT_NOT_CONNECTED`，不发送 MQTT 消息
+
+#### TC-FLIGHTAREA-013：文件名格式校验规则（Dock2 规范）
+- **给定**：`requestFlightAreas()` 收到 requests_reply，output.files 包含文件
+- **那么**：每个文件 `name` 必须匹配 `geofence_[a-fA-F0-9]{32}\.json`（MD5 为 32 位十六进制）
+- **那么**：合规文件名（如 `geofence_d41d8cd98f00b204e9800998ecf8427e.json`）校验通过
+- **那么**：不合规文件名（如 `geofence_xxx.json`、`other.json`、`geofence_abc.json`）校验失败
+- **核实依据**：[Dock2 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock2/wayline.html) "自定义飞行区文件名需满足 geofence_{fileMD5}.json"
+
+#### TC-FLIGHTAREA-014：校验通过不自动上报 sync_progress
+- **给定**：reply 中所有文件名均合规
+- **那么**：`RequestResult.fileValid=true`
+- **那么**：不自动上报 sync_progress（由前端手动触发 synchronized）
+
+#### TC-FLIGHTAREA-015：校验失败自动上报 sync_progress(fail, reason=1)
+- **给定**：reply 中存在不合规文件名
+- **那么**：自动上报 `sync_progress(status=fail, reason=1, file=不合规文件)`（reason=1 "解析云端返回的文件信息失败"）
+- **那么**：`RequestResult.fileValid=false`
+- **说明**：校验失败后自动上报 sync_progress 为推断行为（DJI 文档未明确联动），记录 M-2 诊断日志
+- **核实依据**：同上 reason 枚举（1="解析云端返回的文件信息失败"）
+
+#### TC-FLIGHTAREA-016：空文件列表不校验
+- **给定**：reply 中 output.files 为空数组
+- **那么**：`RequestResult.fileValid=null`，不自动上报 sync_progress
+
+### 2.27 远程解禁（Dock1/Dock2/Dock3 wayline.html）
+
+> 核实依据：[Dock1 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock1/wayline.html) [Dock2 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/wayline.html) [Dock1/Dock2/Dock3 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) 远程解禁
+
+#### TC-UNLOCK-001：unlock_license_switch 启用证书
+- **给定**：平台下发 `services` method=`unlock_license_switch`，data=`{license_id: 240330, enable: true}`
+- **当**：`UnlockLicenseSimulator.handleSwitch(data)` 处理
+- **那么**：返回 `{result: 0, license_id: 240330}`
+- **那么**：内部证书状态 `licenses.get(240330)=true`
+
+#### TC-UNLOCK-002：unlock_license_switch 禁用证书
+- **给定**：平台下发 `services` method=`unlock_license_switch`，data=`{license_id: 240330, enable: false}`
+- **当**：`UnlockLicenseSimulator.handleSwitch(data)` 处理
+- **那么**：返回 `{result: 0, license_id: 240330}`
+- **那么**：内部证书状态 `licenses.get(240330)=false`
+
+#### TC-UNLOCK-003：unlock_license_update 带文件
+- **给定**：平台下发 `services` method=`unlock_license_update`，data=`{file: {url: "https://...", fingerprint: "xxxx"}}`
+- **当**：`UnlockLicenseSimulator.handleUpdate(data)` 处理
+- **那么**：返回 `{result: 0}`
+- **说明**：模拟器不实际下载文件，仅模拟更新成功
+
+#### TC-UNLOCK-004：unlock_license_update 无文件（按服务器最新证书更新）
+- **给定**：平台下发 `services` method=`unlock_license_update`，data=`{}`（file 字段缺省）
+- **当**：`UnlockLicenseSimulator.handleUpdate(data)` 处理
+- **那么**：返回 `{result: 0}`
+- **说明**：DJI 文档注明 file 可缺省，"按照 Flysafe 服务器最新证书进行更新"
+
+#### TC-UNLOCK-005：isUnlockLicenseMethod 指令识别
+- **给定**：method=`unlock_license_switch` 或 method=`unlock_license_update` 或 method=`unlock_license_list`
+- **那么**：`UnlockLicenseSimulator.isUnlockLicenseMethod(method)` 返回 `true`
+- **给定**：method=`flight_areas_update`
+- **那么**：`UnlockLicenseSimulator.isUnlockLicenseMethod(method)` 返回 `false`
+
+#### TC-UNLOCK-006：unlock_license_list 返回 7 种证书类型
+- **给定**：平台下发 `services` method=`unlock_license_list`，data=`{device_model_domain: 0}`
+- **当**：`UnlockLicenseSimulator.handleList(data)` 处理
+- **那么**：返回 `{result: 0, device_model_domain: 0, consistence: true, licenses: [...]}`
+- **那么**：licenses 数组包含 7 个证书，type 分别为 0~6（授权区/圆形/国家/限高/多边形/功率/RID）
+- **那么**：每个证书包含 `common_fields`（license_id/name/type/group_id/user_id/device_sn/begin_time/end_time/user_only/enabled）
+- **核实依据**：[Dock1 wayline.html] [Dock2 wayline.html] [Dock1/Dock2/Dock3 wayline.html] unlock_license_list Example 包含 7 种类型证书
+
+#### TC-UNLOCK-007：unlock_license_list 回显 device_model_domain
+- **给定**：平台下发 data=`{device_model_domain: 3}`（机场）
+- **当**：`UnlockLicenseSimulator.handleList(data)` 处理
+- **那么**：返回的 `device_model_domain=3`（回显请求值）
+- **说明**：模拟器不区分飞行器/机场证书源，均返回相同的模拟证书列表
+
+#### TC-UNLOCK-008：switch 修改的 enabled 状态反映到 list
+- **给定**：先调用 `handleSwitch({license_id: 240330, enable: true})` 启用证书
+- **当**：再调用 `handleList({device_model_domain: 0})` 查询列表
+- **那么**：licenses 中 license_id=240330 的 `common_fields.enabled=true`
+- **那么**：其他未 switch 过的证书 `common_fields.enabled=false`（默认）
+- **说明**：switch 和 list 共享证书状态，调试时可验证平台下发 switch 后 list 是否反映状态变化
+
+#### TC-UNLOCK-009：unlock_license_list 各类型 unlock 结构完整性
+- **给定**：`handleList` 返回的 licenses 数组
+- **那么**：
+  - type=0（授权区）：包含 `area_unlock.area_ids`（int 数组）
+  - type=1（圆形）：包含 `circle_unlock`（radius/latitude/longitude/height）
+  - type=2（国家）：包含 `country_unlock`（country_number/height）
+  - type=3（限高）：包含 `height_unlock`（height）
+  - type=4（多边形）：包含 `polygon_unlock.points`（latitude/longitude 数组）
+  - type=5（功率）：包含 `power_unlock`（空 struct）
+  - type=6（RID）：包含 `rid_unlock`（level: 1=欧盟/2=中国）
+- **核实依据**：[Dock1 wayline.html] [Dock2 wayline.html] [Dock1/Dock2/Dock3 wayline.html] unlock_license_list Data 字段定义表
+
+#### TC-UNLOCK-010：switch 不同 license_id 状态独立
+- **给定**：先调用 `handleSwitch({license_id: 240330, enable: true})`，再调用 `handleSwitch({license_id: 240331, enable: false})`
+- **那么**：内部状态 `licenses.get(240330)=true` 且 `licenses.get(240331)=false`（两个 license_id 独立维护，互不影响）
+- **那么**：`licenses.size()=2`
+- **说明**：验证不同 license_id 的启用状态相互隔离
+
+#### TC-UNLOCK-011：reset 后 list 的 enabled 恢复默认 false
+- **给定**：先 `handleSwitch({license_id: 240330, enable: true})` 启用证书
+- **当**：调用 `resetLicenses()` 清空状态后，再调用 `handleList({device_model_domain: 0})`
+- **那么**：licenses 中所有证书的 `common_fields.enabled=false`（重置后恢复默认）
+- **说明**：reset 与 list 的闭环验证，确保 reset 不仅清空 getLicenses()，也使 list 返回的 enabled 恢复默认
+
+#### TC-UNLOCK-012：list 缺省 device_model_domain 默认 0
+- **给定**：平台下发 data=`{}`（device_model_domain 缺省）
+- **当**：`UnlockLicenseSimulator.handleList(data)` 处理
+- **那么**：返回的 `device_model_domain=0`（默认值）
+- **说明**：handleList 使用 `asInt(0)` 提供默认值，验证缺省场景的边界行为
+
+#### TC-UNLOCK-013：unlock_license_update file 显式 null
+- **给定**：平台下发 data=`{"file": null}`（file 字段存在但值为 null）
+- **当**：`UnlockLicenseSimulator.handleUpdate(data)` 处理
+- **那么**：返回 `{result: 0}`
+- **说明**：handleUpdate 通过 `file.isMissingNode() || file.isNull()` 处理缺省与显式 null 两种情况，验证显式 null 边界
+
+### 2.28 OSD 日志导出接口
+
+#### TC-LOG-001：osd-export 按 SN 过滤
+- **给定**：MQTT 日志中有 topic 含 `7UUXN1Q00A008W` 的 send 日志
+- **当**：调用 `GET /api/logs/osd-export?sn=7UUXN1Q00A008W`
+- **那么**：返回的日志条目 topic 均包含 `7UUXN1Q00A008W`
+- **那么**：不包含其他 SN 的日志
+
+#### TC-LOG-002：osd-export 按 direction 过滤
+- **给定**：MQTT 日志中有 send 和 recv 日志
+- **当**：调用 `GET /api/logs/osd-export?sn=7UUXN1Q00A008W&direction=send`
+- **那么**：仅返回 direction=send 的日志
+- **说明**：direction 默认值为 send
+
+#### TC-LOG-003：osd-export 仅保留 OSD 数据
+- **给定**：日志中有 OSD 上报（payload.data 含 latitude）和 services 指令（payload.data 无 latitude/sub_device）
+- **当**：调用 `GET /api/logs/osd-export?sn=7UUXN1Q00A008W`
+- **那么**：仅返回 payload.data 含 `latitude` 或 `sub_device` 的日志
+- **那么**：每条返回 `{topic, data}` 格式（data 为 payload.data 对象）
+
+#### TC-LOG-004：osd-export limit 限制条数
+- **给定**：日志中有 300 条符合条件的 OSD 日志
+- **当**：调用 `GET /api/logs/osd-export?sn=7UUXN1Q00A008W&limit=200`
+- **那么**：返回最新 200 条（按时间倒序取，再正序返回）
+- **说明**：limit 默认值为 200
+
+#### TC-LOG-005：osd-export 多 SN 支持
+- **给定**：日志中有 `7UUXN1Q00A008W` 和 `1081F8HGD25110010059` 两个 SN 的日志
+- **当**：调用 `GET /api/logs/osd-export?sn=7UUXN1Q00A008W,1081F8HGD25110010059`
+- **那么**：返回两个 SN 的日志合并
+
+### 2.29 PSDK 喊话器与负载事件（Dock1/Dock2/Dock3 wayline.html）
+
+> 核实依据：[Dock1 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock1/wayline.html) / [Dock2 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock2/wayline.html) / [Dock3 wayline.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/dock3/wayline.html) PSDK 喊话器、psdk 浮窗文本、psdk UI 资源包
+
+#### TC-PSDK-001：speaker_play_volume_set 服务应答
+- **给定**：平台下发 `services` method=`speaker_play_volume_set`，data=`{psdk_index: 2, play_volume: 13}`
+- **当**：`PsdkSimulator.handleService(method, data)` 处理
+- **那么**：返回 `{result: 0}`
+- **那么**：内部状态 `getSpeakerVolume(psdkIndex=2)=13`
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] speaker_play_volume_set services_reply Data 仅含 result
+
+#### TC-PSDK-002：speaker_play_mode_set 服务应答
+- **给定**：平台下发 `services` method=`speaker_play_mode_set`，data=`{psdk_index: 2, play_mode: 1}`
+- **当**：`PsdkSimulator.handleService(method, data)` 处理
+- **那么**：返回 `{result: 0}`
+- **那么**：内部状态 `getSpeakerPlayMode(psdkIndex=2)=1`（1=循环播放）
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] speaker_play_mode_set services_reply Data 仅含 result；play_mode 枚举 `{0:单次播放, 1:循环播放(单曲)}`
+
+#### TC-PSDK-003：speaker_play_stop 服务应答
+- **给定**：平台下发 `services` method=`speaker_play_stop`，data=`{psdk_index: 2}`
+- **当**：`PsdkSimulator.handleService(method, data)` 处理
+- **那么**：返回 `{result: 0}`
+- **那么**：内部状态 `isSpeakerPlaying(psdkIndex=2)=false`
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] speaker_play_stop services_reply Data 仅含 result
+
+#### TC-PSDK-004：isPsdkServiceMethod 指令识别
+- **给定**：method=`speaker_play_volume_set` 或 method=`speaker_play_mode_set` 或 method=`speaker_play_stop`
+- **那么**：`PsdkSimulator.isPsdkServiceMethod(method)` 返回 `true`
+- **给定**：method=`unlock_license_switch`
+- **那么**：`PsdkSimulator.isPsdkServiceMethod(method)` 返回 `false`
+
+#### TC-PSDK-005：speaker_tts_play_start_progress 事件结构
+- **给定**：调用 `triggerTtsPlayProgress(psdkIndex=2, status="in_progress", percent=50, stepKey="upload")`
+- **当**：MQTT 已连接
+- **那么**：发布到 `thing/product/{sn}/events`，method=`speaker_tts_play_start_progress`
+- **那么**：报文 data 结构 `{result: 0, output: {psdk_index: 2, status: "in_progress", md5: "<预计算>", progress: {percent: 50, step_key: "upload"}}}`
+- **那么**：`need_reply=0`（进度通知，单向）
+- **那么**：md5 为内置默认 TTS 文本的 UTF-8 字节 MD5（32 位 hex）
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] speaker_tts_play_start_progress Data 字段定义表
+- **step_key 机型差异**：Dock1/Dock2 step_key 枚举为 `{change_work_mode, play, upload}`（3 步），Dock3 为 `{change_work_mode, download, encoding, play, upload}`（5 步，多 `download`/`encoding`）。前端 UI 合并显示 5 个选项，用户根据机型自行选择
+
+#### TC-PSDK-006：speaker_tts_play_start_progress status 枚举值
+- **给定**：status 取值 `in_progress` 或 `ok`
+- **那么**：事件 data.output.status 字段为对应值
+- **说明**：DJI 协议约束定义 `{"in_progress":"处理中","ok":"播放成功"}`，但 speaker_tts_play_start_progress Example 显示 `"status": "success"`（不在枚举内），而 speaker_audio_play_start_progress Example 显示 `"status": "in_progress"`（在枚举内）。参考：DRC 通道 drc_speaker_play_progress 的 status 枚举为 `{failed, in_progress, success}`，与 PSDK events 通道约束不同。模拟器遵循 PSDK events 约束定义，使用 `in_progress`/`ok`，并记录 M-2 诊断日志（DJI 文档自身不一致的推断，待真机验证）
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] speaker_tts_play_start_progress Data 字段 status 枚举约束 vs Example；speaker_audio_play_start_progress Example
+
+#### TC-PSDK-007：speaker_audio_play_start_progress 事件结构
+- **给定**：调用 `triggerAudioPlayProgress(psdkIndex=2, status="in_progress", percent=89, stepKey="upload")`
+- **当**：MQTT 已连接
+- **那么**：发布到 `thing/product/{sn}/events`，method=`speaker_audio_play_start_progress`
+- **那么**：报文 data 结构 `{result: 0, output: {psdk_index: 2, status: "in_progress", md5: "<预计算>", progress: {percent: 89, step_key: "upload"}}}`
+- **那么**：md5 为内置默认 PCM 字节的 MD5（32 位 hex）
+- **那么**：`need_reply=0`
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] speaker_audio_play_start_progress Data 字段定义表；step_key 枚举含 `download`/`encoding` 额外步骤
+
+#### TC-PSDK-008：psdk_floating_window_text 事件结构
+- **给定**：调用 `triggerFloatingWindowText(psdkIndex=2, value="System time : 1193683 ms")`
+- **当**：MQTT 已连接
+- **那么**：发布到 `thing/product/{sn}/events`，method=`psdk_floating_window_text`
+- **那么**：报文 data 结构 `{psdk_index: 2, value: "System time : 1193683 ms"}`（直接平铺，非 output 包裹）
+- **那么**：`need_reply=0`
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] psdk_floating_window_text Data 字段定义表（data 直接含 psdk_index + value）
+
+#### TC-PSDK-009：psdk_ui_resource_upload_result 事件结构
+- **给定**：调用 `triggerUiResourceUploadResult(psdkIndex=2, objectKey="xxx/widget", size=43488, result=0)`
+- **当**：MQTT 已连接
+- **那么**：发布到 `thing/product/{sn}/events`，method=`psdk_ui_resource_upload_result`
+- **那么**：报文 data 结构 `{psdk_index: 2, object_key: "xxx/widget", size: 43488, result: 0}`（直接平铺，非 output 包裹）
+- **那么**：`need_reply=0`
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] psdk_ui_resource_upload_result Data 字段定义表
+
+#### TC-PSDK-010：MQTT 未连接拒绝
+- **给定**：MQTT 未连接
+- **当**：调用任意 trigger 方法
+- **那么**：返回 `TriggerResult.fail("MQTT_NOT_CONNECTED", "MQTT 未连接，无法上报 PSDK 事件")`
+- **说明**：遵循"业务逻辑返回明确拒绝原因而非抛异常"约定
+
+#### TC-PSDK-011：md5 字段可由 REST API 覆盖
+- **给定**：调用 `triggerTtsPlayProgress(..., md5Override="custom_md5_32_hex")`
+- **那么**：事件 data.output.md5 字段为 `"custom_md5_32_hex"`（覆盖内置默认 MD5）
+- **说明**：模拟器内置默认 TTS 文本和默认 PCM 字节并预计算 MD5；REST API 可传入自定义 md5 覆盖（不实际接收文件，仅模拟）
+
+#### TC-PSDK-012：psdk_index 必传校验
+- **给定**：REST API 请求体未提供 psdk_index
+- **那么**：返回 HTTP 200 + `{success: false, message: "psdk_index 为必填"}`
+- **说明**：psdk_index 由 REST API 必传，强制用户显式指定（无默认值），符合模拟器"可控验证"核心价值
+
+#### TC-PSDK-013：speaker_replay 服务应答
+- **给定**：平台下发 `services` method=`speaker_replay`，data=`{psdk_index: 2}`
+- **当**：`PsdkSimulator.handleService(method, data)` 处理
+- **那么**：返回 `{result: 0}`
+- **那么**：内部状态 `isSpeakerPlaying(psdkIndex=2)=true`（重新播放 = 播放状态置为 true，与 speaker_play_stop 的 false 对应）
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] speaker_replay services_reply Data 仅含 result
+
+#### TC-PSDK-014：speaker_tts_play_start 服务应答
+- **给定**：平台下发 `services` method=`speaker_tts_play_start`，data=`{psdk_index: 2, tts: {name: "1111", text: "1111", md5: "0bfb9bceee974f41a6ddfd81521bd795"}}`
+- **当**：`PsdkSimulator.handleService(method, data)` 处理
+- **那么**：返回 `{result: 0}`
+- **那么**：内部状态 `isSpeakerPlaying(psdkIndex=2)=true`
+- **那么**：`getLastTts(psdkIndex=2)` 返回 `{name: "1111", text: "1111", md5: "0bfb9bceee974f41a6ddfd81521bd795"}`
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] speaker_tts_play_start services_reply Data 仅含 result；Data 含 psdk_index + tts struct（name/text/md5）
+
+#### TC-PSDK-015：speaker_audio_play_start 服务应答
+- **给定**：平台下发 `services` method=`speaker_audio_play_start`，data=`{psdk_index: 2, file: {name: "20230720162718", url: "https://example.com/xxx.pcm", md5: "b38257017001f45ec064b5157b2e4416", format: "pcm"}}`
+- **当**：`PsdkSimulator.handleService(method, data)` 处理
+- **那么**：返回 `{result: 0}`
+- **那么**：内部状态 `isSpeakerPlaying(psdkIndex=2)=true`
+- **那么**：`getLastAudioFile(psdkIndex=2)` 返回 `{name: "20230720162718", url: "https://example.com/xxx.pcm", md5: "b38257017001f45ec064b5157b2e4416", format: "pcm"}`
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] speaker_audio_play_start services_reply Data 仅含 result；Data 含 psdk_index + file struct（name/url/md5/format）
+
+#### TC-PSDK-016：psdk_input_box_text_set 服务应答与浮窗事件联动
+- **给定**：平台下发 `services` method=`psdk_input_box_text_set`，data=`{psdk_index: 2, value: "hello world"}`
+- **当**：`PsdkSimulator.handleService(method, data)` 处理（MQTT 已连接）
+- **那么**：返回 `{result: 0}`
+- **那么**：`getInputBoxText(psdkIndex=2)` 返回 `"hello world"`
+- **那么**：自动发布 `psdk_floating_window_text` 事件到 `thing/product/{sn}/events`，data=`{psdk_index: 2, value: "hello world"}`，`need_reply=0`
+- **说明**：psdk_input_box_text_set 收到文本框内容后，记录 value 并自动触发 psdk_floating_window_text 事件上报（将输入框内容同步推送到浮窗）
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] psdk_input_box_text_set services_reply Data 仅含 result；psdk_floating_window_text 事件 Data 结构
+
+#### TC-PSDK-017：isPsdkServiceMethod 识别第 2/3 部分新指令
+- **给定**：method=`speaker_replay` 或 method=`speaker_tts_play_start` 或 method=`speaker_audio_play_start` 或 method=`psdk_input_box_text_set`
+- **那么**：`PsdkSimulator.isPsdkServiceMethod(method)` 返回 `true`
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] PSDK 喊话器第 2/3 部分指令集
+
+#### TC-PSDK-018：psdk_widget_value_set 服务应答
+- **给定**：平台下发 `services` method=`psdk_widget_value_set`，data=`{psdk_index: 2, index: 1, value: 60}`
+- **当**：`PsdkSimulator.handleService(method, data)` 处理
+- **那么**：返回 `{result: 0}`
+- **那么**：`getWidgetValue(psdkIndex=2, index=1)` 返回 `60`
+- **说明**：控件值按 psdk_index + widget index 二维维护，支持多个控件独立设置
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] psdk_widget_value_set services_reply Data 仅含 result；Data 含 psdk_index + index + value
+
+#### TC-PSDK-019：isPsdkServiceMethod 识别 psdk_widget_value_set
+- **给定**：method=`psdk_widget_value_set`
+- **那么**：`PsdkSimulator.isPsdkServiceMethod(method)` 返回 `true`
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] PSDK 设置控件值指令
+
+#### TC-PSDK-020：storage_config_get (module=1) 请求获取 PSDK UI 资源凭证
+- **给定**：MQTT 已连接，平台正常返回 STS 凭证
+- **当**：`PsdkSimulator.uploadUiResource(psdkIndex=2)` 发送 `storage_config_get` 请求（data.module=1）
+- **那么**：发送到 `thing/product/{sn}/requests`，method=`storage_config_get`，data=`{module: 1}`
+- **那么**：解析 requests_reply 中的 STS 凭证（bucket/credentials/endpoint/object_key_prefix/provider/region）
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] storage_config_get Data 含 module 枚举（0=媒体/1=psdk ui 资源）
+
+#### TC-PSDK-021：PSDK UI 资源完整上传流程
+- **给定**：MQTT 已连接，storage_config_get (module=1) 返回有效凭证
+- **当**：`PsdkSimulator.uploadUiResource(psdkIndex=2)` 执行完整流程
+- **那么**：时序为 `storage_config_get(module=1)` → 上传内置占位 UI 资源文件到对象存储 → 上报 `psdk_ui_resource_upload_result` 事件
+- **那么**：psdk_ui_resource_upload_result 事件 data 含 `{psdk_index: 2, object_key, size, result: 0}`（result=0 表示上传成功）
+- **那么**：object_key 格式为 `{object_key_prefix}/{psdk_index}/widget`
+- **说明**：内置占位 UI 资源字节（一段固定的 widget JSON），上传时写入临时文件复用 MediaUploader
+- **核实依据**：[Dock1/Dock2/Dock3 wayline.html] psdk_ui_resource_upload_result 事件 Data 结构；storage_config_get requests_reply 结构
+
+#### TC-PSDK-022：custom_data_transmission_to_psdk 服务应答
+- **给定**：平台下发 `services` method=`custom_data_transmission_to_psdk`，data=`{value: "hello world"}`
+- **当**：`PsdkSimulator.handleService(method, data)` 处理
+- **那么**：services_reply data 含 `{result: 0}`
+- **那么**：内部状态 `lastCustomData` 记录 value="hello world"
+- **核实依据**：[Dock1/Dock2/Dock3 psdk-transmit-custom-data.html] custom_data_transmission_to_psdk Data 字段定义表
+
+#### TC-PSDK-023：custom_data_transmission_from_psdk 事件上报
+- **给定**：MQTT 已连接，psdk_index=2，value="hello world"
+- **当**：`PsdkSimulator.triggerCustomDataFromPsdk(psdkIndex=2, value="hello world")` 触发
+- **那么**：发布 events 主题，method=`custom_data_transmission_from_psdk`
+- **那么**：报文 data 结构 `{value: "hello world"}`
+- **那么**：`need_reply=0`（单向通知，DJI 文档未标注 need_reply，遵循现有 PSDK 事件设置，记录 M-2 诊断日志）
+- **核实依据**：[Dock1/Dock2/Dock3 psdk-transmit-custom-data.html] custom_data_transmission_from_psdk Data 字段定义表
+
+#### TC-PSDK-024：isPsdkServiceMethod 识别 custom_data_transmission_to_psdk
+- **给定**：method=`custom_data_transmission_to_psdk`
+- **当**：`PsdkSimulator.isPsdkServiceMethod(method)` 判断
+- **那么**：返回 true
+- **核实依据**：[Dock1/Dock2/Dock3 psdk-transmit-custom-data.html] custom_data_transmission_to_psdk 属于 services 通道
+
+### ESDK 互联互通（Dock1/Dock2/Dock3 esdk-transmit-custom-data.html）
+
+#### TC-ESDK-001：custom_data_transmission_to_esdk 服务应答
+- **给定**：平台下发 `services` method=`custom_data_transmission_to_esdk`，data=`{value: "hello world"}`
+- **当**：`EsdkSimulator.handleService(method, data)` 处理
+- **那么**：services_reply data 含 `{result: 0}`
+- **那么**：内部状态 `lastCustomData` 记录 value="hello world"
+- **核实依据**：[Dock1/Dock2/Dock3 esdk-transmit-custom-data.html] custom_data_transmission_to_esdk Data 字段定义表
+
+#### TC-ESDK-002：custom_data_transmission_from_esdk 事件上报
+- **给定**：MQTT 已连接，value="hello world"
+- **当**：`EsdkSimulator.triggerCustomDataFromEsdk(value="hello world")` 触发
+- **那么**：发布 events 主题，method=`custom_data_transmission_from_esdk`
+- **那么**：报文 data 结构 `{value: "hello world"}`
+- **那么**：`need_reply=0`（单向通知，DJI 文档未标注 need_reply，遵循现有事件设置，记录 M-2 诊断日志）
+- **核实依据**：[Dock1/Dock2/Dock3 esdk-transmit-custom-data.html] custom_data_transmission_from_esdk Data 字段定义表
+
+#### TC-ESDK-003：isEsdkServiceMethod 识别 custom_data_transmission_to_esdk
+- **给定**：method=`custom_data_transmission_to_esdk`
+- **当**：`EsdkSimulator.isEsdkServiceMethod(method)` 判断
+- **那么**：返回 true
+- **核实依据**：[Dock1/Dock2/Dock3 esdk-transmit-custom-data.html] custom_data_transmission_to_esdk 属于 services 通道
+
+### 远程日志（Dock1/Dock2/Dock3 log-upload.html）
+
+#### TC-RLOG-001：fileupload_start 服务应答
+- **给定**：平台下发 `services` method=`fileupload_start`，data 含 bucket/credentials/params.files
+- **当**：`RemoteLogSimulator.handleService(method, data)` 处理
+- **那么**：services_reply data 含 `{result: 0}`
+- **那么**：内部状态记录上传任务（module, device_sn, key, fingerprint, size, boot_index）
+- **核实依据**：[Dock1/Dock2/Dock3 log-upload.html] fileupload_start Data 字段定义表
+
+#### TC-RLOG-002：fileupload_start 自动模拟上传进度
+- **给定**：MQTT 已连接，fileupload_start 已处理
+- **当**：异步进度模拟执行
+- **那么**：先上报 fileupload_progress 事件 status=`in_progress`，percent 递增
+- **那么**：最后上报 fileupload_progress 事件 status=`ok`，percent=100
+- **那么**：事件 data.output.ext.files[].progress 含完整字段集（current_step/finish_time/progress/result/status/upload_rate，dock 模块额外含 total_step）
+- **那么**：进度字段使用 Example 中的 `progress`（Dock3 Column 表写 `prgress` 疑似拼写错误，Dock1/Dock2 Column 表拼写正确；两者均仅列 3 字段而 Example 含 7 字段，以 Example 为准，记录 M-2 诊断日志）
+- **核实依据**：[Dock1/Dock2/Dock3 log-upload.html] fileupload_progress Example
+
+#### TC-RLOG-003：fileupload_update 取消上传
+- **给定**：fileupload_start 已处理，异步上传进行中
+- **当**：平台下发 `services` method=`fileupload_update`，data=`{status: "cancel", module_list: ["0","3"]}`
+- **那么**：services_reply data 含 `{result: 0}`
+- **那么**：异步上传被取消，不再上报 fileupload_progress 事件
+- **核实依据**：[Dock1/Dock2/Dock3 log-upload.html] fileupload_update Data 字段定义表
+
+#### TC-RLOG-004：fileupload_progress 事件结构（module=3 dock）
+- **给定**：MQTT 已连接，手动触发 fileupload_progress 事件
+- **当**：`RemoteLogSimulator.triggerFileUploadProgress(status, percent)` 触发
+- **那么**：发布 events 主题，method=`fileupload_progress`
+- **那么**：`need_reply=0`（单向通知）
+- **那么**：报文 data 结构 `{result: 0, output: {ext: {files: [{module, size, device_sn, key, fingerprint, progress: {current_step, finish_time, progress, result, status, total_step, upload_rate}}]}, status}}`
+- **那么**：dock 模块(module=3)的 progress 携带 `total_step`，与 DJI Example 一致
+- **核实依据**：[Dock1/Dock2/Dock3 log-upload.html] fileupload_progress Example
+
+#### TC-RLOG-004b：fileupload_progress 飞行器模块不含 total_step
+- **给定**：fileupload_start 指定 module=`0`（飞行器）
+- **当**：触发 fileupload_progress 事件
+- **那么**：飞行器模块(module=0)的 progress 不含 `total_step`，与 DJI Example 一致（Example 中仅 dock 文件含 total_step）
+- **核实依据**：[Dock1/Dock2/Dock3 log-upload.html] fileupload_progress Example
+
+#### TC-RLOG-005：isRemoteLogServiceMethod 识别远程日志指令
+- **给定**：method=`fileupload_start` / `fileupload_update` / `fileupload_list`
+- **当**：`RemoteLogSimulator.isRemoteLogServiceMethod(method)` 判断
+- **那么**：返回 true
+- **核实依据**：[Dock1/Dock2/Dock3 log-upload.html] fileupload_start/fileupload_update/fileupload_list 属于 services 通道
+
+#### TC-RLOG-006：fileupload_list 服务应答
+- **给定**：平台下发 `services` method=`fileupload_list`，data=`{module_list: ["0", "3"]}`
+- **当**：`RemoteLogSimulator.handleService(method, data)` 处理
+- **那么**：services_reply data 含 `{result: 0, files: [...]}`
+- **那么**：files 数组每个元素含 `{device_sn, module, result: 0, list: [{boot_index, start_time, end_time, size}]}`
+- **那么**：module=0 的 device_sn 为飞行器 SN，module=3 的 device_sn 为机场 SN
+- **那么**：list 项使用正确拼写 `end_time`（DJI Example 中第二个 list 项误写为 `end_ime`，Column 表为 `end_time`，以 Column 表为准，记录 M-2 诊断日志）
+- **那么**：start_time/end_time 使用毫秒时间戳（Dock1/Dock2 Column 表标注单位为「秒 / s」但 Example 值为 13 位毫秒时间戳，Dock3 Column 表标注「毫秒 / ms」，以 Example 值和 Dock3 标注为准，记录 M-2 诊断日志）
+- **那么**：仅返回 module_list 中请求的模块文件（过滤）
+- **核实依据**：[Dock1/Dock2/Dock3 log-upload.html] fileupload_list Data 字段定义表 + Example
+
+#### TC-RLOG-006b：fileupload_list 模块过滤
+- **给定**：平台下发 `services` method=`fileupload_list`，data=`{module_list: ["0"]}`（仅请求飞行器）
+- **当**：`RemoteLogSimulator.handleService(method, data)` 处理
+- **那么**：files 数组仅含 1 个元素（module=0），不返回 module=3 的文件
+- **核实依据**：[Dock1/Dock2/Dock3 log-upload.html] fileupload_list module_list 为过滤列表
+
+### 固件升级（Dock1/Dock2/Dock3 firmware-upgrade.html）
+
+#### TC-OTA-001：ota_create 服务应答
+- **给定**：平台下发 `services` method=`ota_create`，data 含 devices 数组（sn/product_version/file_url/md5/file_size/file_name/firmware_upgrade_type）
+- **当**：`OtaSimulator.handleService(method, data)` 处理
+- **那么**：services_reply data 含 `{result: 0, output: {status: "in_progress"}}`
+- **那么**：内部状态记录升级任务（device SN 列表、固件版本等）
+- **核实依据**：[Dock1/Dock2/Dock3 firmware-upgrade.html] ota_create Data 字段定义表 + Example
+
+#### TC-OTA-002：ota_create 自动模拟升级进度
+- **给定**：MQTT 已连接，ota_create 已处理
+- **当**：异步进度模拟执行
+- **那么**：先上报 ota_progress 事件，`status=in_progress`，`progress.current_step=download_firmware`，percent 递增
+- **那么**：再上报 ota_progress 事件，`status=in_progress`，`progress.current_step=upgrade_firmware`，percent 递增
+- **那么**：最后上报 ota_progress 事件，`status=ok`
+- **那么**：事件 data 结构含 `{result: 0, output: {status, progress: {percent, current_step}}}`
+- **核实依据**：[Dock1/Dock2/Dock3 firmware-upgrade.html] ota_progress Example + status/current_step 枚举
+
+#### TC-OTA-003：ota_progress 事件结构
+- **给定**：MQTT 已连接，手动触发 ota_progress 事件
+- **当**：`OtaSimulator.triggerOtaProgress(status, currentStep, percent)` 触发
+- **那么**：发布 events 主题，method=`ota_progress`
+- **那么**：`need_reply=0`（单向通知）
+- **那么**：报文 data 结构 `{result: 0, output: {status, progress: {percent, current_step}}}`
+- **核实依据**：[Dock1/Dock2/Dock3 firmware-upgrade.html] ota_progress Data 字段定义表
+
+#### TC-OTA-004：ota_progress current_step 枚举
+- **给定**：触发 ota_progress 事件
+- **那么**：`current_step` 仅允许 `download_firmware`（下载固件）或 `upgrade_firmware`（更新固件）
+- **核实依据**：[Dock1/Dock2/Dock3 firmware-upgrade.html] ota_progress current_step 枚举定义
+
+#### TC-OTA-005：isOtaServiceMethod 识别固件升级指令
+- **给定**：method=`ota_create`
+- **当**：`OtaSimulator.isOtaServiceMethod(method)` 判断
+- **那么**：返回 true
+- **核实依据**：[Dock1/Dock2/Dock3 firmware-upgrade.html] ota_create 属于 services 通道
+
+#### 协议差异说明：Dock1 ota_progress 字段名（已确认）
+
+- **差异**：DJI 线上 Dock1 旧文档（2023-07-18，[dock/firmware.html](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt/dock/firmware.html)）ota_progress 的 progress 字段定义为 `{percent, step_key, step_result}`（step_key 为当前步骤 enum，step_result 为步骤结果 int 非0代表错误）；Dock2 官方文档（2025-03-19，[dock/dock2/firmware.html](https://developer.dji.com/doc/cloud-api-tutorial/en/api-reference/dock-to-cloud/mqtt/dock/dock2/firmware.html)）为 `{percent, current_step}`（无 step_result）
+- **确认结论**：Dock1 验证以最新协议文档为准，ota_progress progress 字段为 `{percent, current_step}`（与 Dock2 统一，无 step_key/step_result）。DJI 线上旧文档(2023-07-18)未同步更新，不作为实现依据
+- **实现**：OtaSimulator 按 current_step 统一实现（Dock1/Dock2/Dock3 通用），不输出 step_key/step_result
+
+#### 前端行为：ota_progress 终态默认值
+
+- **场景**：UI 选择 status 时，progress.percent/current_step 自动设置合理默认值，体现升级过程
+- **规则**：
+  - `sent`（已下发）→ percent=0, current_step=download_firmware
+  - `rejected`（拒绝）→ percent=0, current_step=download_firmware
+  - `ok`（执行成功）→ percent=100, current_step=upgrade_firmware
+  - `in_progress`/`paused`/`failed`/`canceled`/`timeout` → 保持用户填写的值（进度不定，可手动覆盖）
+- **说明**：DJI 文档未明确终态 progress.percent 取值，此为模拟器合理推断（体现过程语义）
+
+### 2.30 Pilot 上云 WebSocket 推送（地图元素）
+
+> 设计背景：Pilot 上云除 MQTT/HTTP 外，还通过 WebSocket 接收 hivemind 推送的地图元素变更通知。
+> DJI 官方协议：消息结构 `{biz_code, version, timestamp, data}`，4 种 biz_code：
+> `map_element_create` / `map_element_update` / `map_element_delete` / `map_group_refresh`。
+> 模拟器角色是 Pilot，收到推送后：`map_group_refresh` 触发 HTTP 重新拉取图层元素，其他 3 种仅记录事件日志供前端验证。
+> 事件日志结构参考 `MqttClientManager.messageLogs`，提供 REST API `GET /api/map/ws-events` 供前端查询。
+> 核实依据：[DJI 地图元素 WebSocket 消息发布](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/websocket/map-elements/message-push.html)
+
+#### TC-WS-001：WebSocket 连接 URL 携带 x-auth-token
+- **给定**：`hivemind.websocket.url=wss://host:port`，token 暂留空（待 JSBridge 阶段补充）
+- **当**：Pilot 上线调用 `HivemindWsClient.connect()`
+- **那么**：连接 URL 为 `wss://host:port?x-auth-token=`（token 为空时仍拼接参数，保持协议一致）
+- **那么**：连接成功后状态为 `connected=true`
+- **核实依据**：[JSBridge WS 模块](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/jsbridge.html) 连接示例 `wss://xxx:port?x-auth-token=xxx`
+
+#### TC-WS-002：WebSocket 未配置时 connect 跳过
+- **给定**：`hivemind.websocket.url` 为空
+- **当**：调用 `HivemindWsClient.connect()`
+- **那么**：不抛异常，记录警告日志，状态保持 `connected=false`
+- **说明**：与 HivemindHttpClient 配置缺失行为一致
+
+#### TC-WS-003：biz_code 分发到对应 Handler
+- **给定**：`MapElementWsHandler` 注册支持 `map_element_create`/`map_element_update`/`map_element_delete`/`map_group_refresh`
+- **当**：`HivemindWsClient` 收到消息 `{biz_code:"map_element_create", data:{...}}`
+- **那么**：调用 `MapElementWsHandler.handle(message)`
+- **当**：收到未注册的 biz_code（如 `tsa_event`）
+- **那么**：不调用任何 Handler，记录警告日志（避免未来扩展时遗漏）
+- **说明**：HivemindWsClient 与业务解耦，按 biz_code 路由
+
+#### TC-WS-004：map_group_refresh 触发 HTTP 拉取
+- **给定**：收到消息 `{biz_code:"map_group_refresh", data:{ids:["group-a","group-b"]}}`
+- **当**：`MapElementWsHandler.handle(message)` 处理
+- **那么**：对每个 group_id 调用 `MapElementSimulator.fetchElements(groupId)`
+- **那么**：调用次数 = ids 数量（2 次）
+- **核实依据**：DJI 时序图"web端拖动地图元素 → websocket 通知客户端刷新 → 客户端 HTTP 调用获取元素列表"
+
+#### TC-WS-005：map_element_create/update/delete 仅记录事件日志
+- **给定**：收到消息 `{biz_code:"map_element_create", data:{id:"elem-1", group_id:"group-a", name:"目标点", resource:{...}}}`
+- **当**：`MapElementWsHandler.handle(message)` 处理
+- **那么**：不触发 HTTP 调用（模拟器不缓存元素列表）
+- **那么**：记录事件日志，字段含 `time/biz_code/group_id/element_id/name/payload`
+- **说明**：模拟器定位是验证平台代码，不维护元素副本
+
+#### TC-WS-006：事件日志容量上限
+- **给定**：事件日志已达上限（复用 `simulator.log.max-size`，默认 2000）
+- **当**：收到新消息
+- **那么**：丢弃最旧条目，追加新条目（FIFO）
+- **说明**：与 `MqttClientManager.messageLogs` 一致，避免内存无限增长
+
+#### TC-WS-007：事件日志 REST API
+- **给定**：已收到若干 WebSocket 推送消息
+- **当**：前端调用 `GET /api/map/ws-events`
+- **那么**：返回 `{success:true, events:[...], count:N}`（最新 N 条，倒序或正序由实现决定）
+- **那么**：每条 event 含 `time/biz_code/group_id/element_id/name/payload`
+- **那么**：非 Pilot 模式返回 `{success:false, message:"非 Pilot 模式，WebSocket 功能不可用"}`
+
+#### TC-WS-008：Pilot 下线时断开 WebSocket
+- **给定**：WebSocket 已连接
+- **当**：`MapElementSimulator.destroy()` 被调用（Pilot 下线）
+- **那么**：调用 `HivemindWsClient.disconnect()`
+- **那么**：连接关闭，状态 `connected=false`
+- **那么**：事件日志不清空（保留历史供前端查看）
+
+#### TC-WS-009：非 Pilot 模式不连接 WebSocket
+- **给定**：`deviceMode=DOCK`
+- **当**：`MapElementSimulator.init()` 被调用
+- **那么**：不调用 `HivemindWsClient.connect()`
+- **说明**：与 MapElementSimulator 现有 `isPilotMode()` 守卫一致
+
+### 2.31 Pilot 上云态势感知（WebSocket + HTTP）
+
+> 设计背景：Pilot 上云通过 WebSocket 接收 hivemind 推送的态势感知消息（设备遥感、上线/下线/拓扑更新通知）。
+> DJI 官方协议：消息结构 `{biz_code, version, timestamp, data}`，4 种 biz_code：
+> `device_osd`（设备遥感，定频推送）/ `device_online` / `device_offline` / `device_update_topo`。
+> 模拟器角色是 Pilot：
+> - `device_osd` 仅记录事件日志（定频推送，PILOT 更新地图设备状态）
+> - `device_online/offline/update_topo` 触发 HTTP 调用"获取设备拓扑列表" + 记录事件日志
+> - Pilot 首次上线后主动调用一次"获取设备拓扑列表"（DJI 文档要求）
+> 事件日志结构参考 `MapElementWsHandler.eventLogs`，提供 REST API `GET /api/tsa/ws-events` 供前端查询。
+> 核实依据：
+> - [DJI 态势感知 WebSocket 消息发布](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/websocket/situation-awareness/message-push.html)
+> - [DJI 获取设备拓扑列表 HTTP API](https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/pilot-to-cloud/https/situation-awareness/obtain-device-topology-list.html)
+
+#### TC-TSA-001：device_osd 仅记录事件日志，不触发 HTTP
+- **给定**：收到消息 `{biz_code:"device_osd", data:{sn:"drone01", host:{latitude:113.44, longitude:23.45, height:44, attitude_head:90, elevation:40, horizontal_speed:0, vertical_speed:2.3}}}`
+- **当**：`SituationAwarenessWsHandler.handle(message)` 处理
+- **那么**：不触发 HTTP 调用（定频推送，不需要拉取）
+- **那么**：记录事件日志，字段含 `time/biz_code/sn/latitude/longitude/height/attitude_head/elevation/horizontal_speed/vertical_speed/payload`
+- **核实依据**：DJI 文档"服务端定频推送设备遥感信息给 PILOT 端，PILOT 根据数据实时更新地图设备状态"
+
+#### TC-TSA-002：device_online 触发获取设备拓扑列表
+- **给定**：收到消息 `{biz_code:"device_online", data:{}}`
+- **当**：`SituationAwarenessWsHandler.handle(message)` 处理
+- **那么**：调用 `DeviceTopoApi.getDeviceTopo()`（GET /manage/api/v1/workspaces/{workspace_id}/devices/topologies）
+- **那么**：记录事件日志
+- **核实依据**：DJI 文档"PILOT 收到推送后，会触发获取设备拓扑列表"
+
+#### TC-TSA-003：device_offline 触发获取设备拓扑列表
+- **给定**：收到消息 `{biz_code:"device_offline", data:{}}`
+- **当**：`SituationAwarenessWsHandler.handle(message)` 处理
+- **那么**：调用 `DeviceTopoApi.getDeviceTopo()`
+- **那么**：记录事件日志
+
+#### TC-TSA-004：device_update_topo 触发获取设备拓扑列表
+- **给定**：收到消息 `{biz_code:"device_update_topo", data:{}}`
+- **当**：`SituationAwarenessWsHandler.handle(message)` 处理
+- **那么**：调用 `DeviceTopoApi.getDeviceTopo()`
+- **那么**：记录事件日志
+
+#### TC-TSA-005：Pilot 首次上线主动调用获取设备拓扑列表
+- **给定**：Pilot 模式上线，`SituationAwarenessSimulator.init()` 被调用
+- **当**：init 执行
+- **那么**：调用 `DeviceTopoApi.getDeviceTopo()` 一次
+- **核实依据**：DJI 文档"PILOT 在首次上线后，会发送 http 请求去获取同一个工作空间下的所有设备列表及其拓扑"
+
+#### TC-TSA-006：态势感知事件日志容量上限
+- **给定**：事件日志已达上限（复用 `simulator.log.max-size`，默认 2000）
+- **当**：收到新消息
+- **那么**：丢弃最旧条目，追加新条目（FIFO）
+- **说明**：与 `MapElementWsHandler.eventLogs` 一致
+
+#### TC-TSA-007：态势感知事件日志 REST API
+- **给定**：已收到若干态势感知推送消息
+- **当**：前端调用 `GET /api/tsa/ws-events`
+- **那么**：返回 `{success:true, events:[...], count:N}`
+- **那么**：非 Pilot 模式返回 `{success:false, message:"非 Pilot 模式，WebSocket 功能不可用"}`
+
+#### TC-TSA-008：非 Pilot 模式不触发首次获取设备拓扑
+- **给定**：`deviceMode=DOCK`
+- **当**：`SituationAwarenessSimulator.init()` 被调用
+- **那么**：不调用 `DeviceTopoApi.getDeviceTopo()`
+- **说明**：与 `MapElementSimulator.init()` 守卫一致
+
+#### TC-TSA-009：DeviceTopoApi 路径前缀与 MapElementApi 不同
+- **给定**：调用 `DeviceTopoApi.getDeviceTopo()`
+- **那么**：HTTP 请求路径为 `/manage/api/v1/workspaces/{workspace_id}/devices/topologies`
+- **那么**：路径前缀为 `/manage/api/v1/workspaces`（与 MapElementApi 的 `/map/api/v1/workspaces` 不同）
+- **核实依据**：DJI 文档明确规定态势感知 API 走 `/manage/api/` 前缀
 
 ## 3. 使用方式
 

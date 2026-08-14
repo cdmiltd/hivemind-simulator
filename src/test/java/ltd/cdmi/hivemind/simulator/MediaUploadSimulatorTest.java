@@ -26,9 +26,9 @@ import ltd.cdmi.hivemind.simulator.device.DockOnlineService;
 import ltd.cdmi.hivemind.simulator.handler.MediaUploader;
 import ltd.cdmi.hivemind.simulator.handler.MediaUploadSimulator;
 import ltd.cdmi.hivemind.simulator.handler.ServiceCommandHandler;
+import ltd.cdmi.hivemind.simulator.mqtt.DockTopicSchema;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager.MqttMessageListener;
-import ltd.cdmi.hivemind.simulator.mqtt.TopicConstants;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
@@ -62,8 +62,11 @@ class MediaUploadSimulatorTest {
         return new SimulatorProperties(
                 new SimulatorProperties.Location(30.67, 104.07, 500.0),
                 new SimulatorProperties.Log(2000),
-                new SimulatorProperties.Live(false, "", ""),
-                new SimulatorProperties.Media("")
+                new SimulatorProperties.Live(false, "", "", null),
+                new SimulatorProperties.Media("", false, 0, false, 0),
+                null,
+                null,
+                null
         );
     }
 
@@ -84,7 +87,7 @@ class MediaUploadSimulatorTest {
                           ObjectMapper objectMapper, DockOnlineService onlineService,
                           ServiceCommandHandler commandHandler, MediaUploader mediaUploader,
                           RuntimeConfig runtimeConfig, long timeoutSec) {
-            super(props, mqtt, objectMapper, onlineService, commandHandler, mediaUploader, runtimeConfig);
+            super(props, mqtt, objectMapper, onlineService, commandHandler, mediaUploader, runtimeConfig, new DockTopicSchema());
             this.timeoutSec = timeoutSec;
         }
 
@@ -113,8 +116,9 @@ class MediaUploadSimulatorTest {
 
     /** 捕获 events_reply 监听器并模拟云端回复（同步触发，测试不阻塞） */
     private void simulateEventReplies(MqttClientManager mqtt, ObjectMapper objectMapper) {
+        DockTopicSchema schema = new DockTopicSchema();
         final MqttMessageListener[] capturedListener = new MqttMessageListener[1];
-        String eventsReplyTopic = TopicConstants.topic(TopicConstants.EVENTS_REPLY, DOCK_SN);
+        String eventsReplyTopic = schema.topic(schema.eventsReply(), DOCK_SN);
 
         Mockito.doAnswer(invocation -> {
             String topic = invocation.getArgument(0);
@@ -124,7 +128,7 @@ class MediaUploadSimulatorTest {
             return null;
         }).when(mqtt).addListener(Mockito.anyString(), Mockito.any(MqttMessageListener.class));
 
-        String eventsTopic = TopicConstants.topic(TopicConstants.EVENTS, DOCK_SN);
+        String eventsTopic = schema.topic(schema.events(), DOCK_SN);
         Mockito.doAnswer(invocation -> {
             String topic = invocation.getArgument(0);
             Object obj = invocation.getArgument(1);
@@ -152,12 +156,12 @@ class MediaUploadSimulatorTest {
 
         MediaUploadSimulator simulator = createNoWaitSimulator(objectMapper, mqtt, onlineService);
 
-        // 反射调用 publishFileUploadCallback（5参数：含 objectKeyPrefix）
+        // 反射调用 publishFileUploadCallback（4参数：含 objectKeyPrefix）
         Method method = MediaUploadSimulator.class.getDeclaredMethod(
                 "publishFileUploadCallback", String.class, String.class,
-                int.class, int.class, String.class);
+                int.class, String.class);
         method.setAccessible(true);
-        method.invoke(simulator, "TEST-FLIGHT", "test.jpg", 0, 3, "prefix-abc");
+        method.invoke(simulator, "TEST-FLIGHT", "test.jpg", 0, "prefix-abc");
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         Mockito.verify(mqtt).publishJson(Mockito.anyString(), captor.capture());
@@ -194,11 +198,6 @@ class MediaUploadSimulatorTest {
         assertTrue(metadata.has("relative_altitude"));
         assertTrue(metadata.path("shoot_position").has("lat"));
         assertTrue(metadata.path("shoot_position").has("lng"));
-
-        // flight_task 结构（hivemind 据此统计上传计数）
-        JsonNode flightTask = node.path("data").path("flight_task");
-        assertEquals(1, flightTask.path("uploaded_file_count").asInt());
-        assertEquals(3, flightTask.path("expected_file_count").asInt());
     }
 
     // ==================== TC-MEDIA-003：object_key 拼接 object_key_prefix ====================
@@ -218,9 +217,9 @@ class MediaUploadSimulatorTest {
 
         Method method = MediaUploadSimulator.class.getDeclaredMethod(
                 "publishFileUploadCallback", String.class, String.class,
-                int.class, int.class, String.class);
+                int.class, String.class);
         method.setAccessible(true);
-        method.invoke(simulator, flightId, fileName, 0, 1, prefix);
+        method.invoke(simulator, flightId, fileName, 0, prefix);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
         Mockito.verify(mqtt).publishJson(Mockito.anyString(), captor.capture());
@@ -339,6 +338,7 @@ class MediaUploadSimulatorTest {
 
     @Test
     void completeUploadFlowSequence() throws Exception {
+        DockTopicSchema schema = new DockTopicSchema();
         ObjectMapper objectMapper = new ObjectMapper();
         MqttClientManager mqtt = Mockito.mock(MqttClientManager.class);
         DockOnlineService onlineService = Mockito.mock(DockOnlineService.class);
@@ -348,7 +348,7 @@ class MediaUploadSimulatorTest {
         // 捕获所有 publishJson 调用的 method（用于验证时序）
         List<String> publishedMethods = new ArrayList<>();
         final MqttMessageListener[] capturedListener = new MqttMessageListener[1];
-        String eventsReplyTopic = TopicConstants.topic(TopicConstants.EVENTS_REPLY, DOCK_SN);
+        String eventsReplyTopic = schema.topic(schema.eventsReply(), DOCK_SN);
 
         Mockito.doAnswer(invocation -> {
             String topic = invocation.getArgument(0);
@@ -358,7 +358,7 @@ class MediaUploadSimulatorTest {
             return null;
         }).when(mqtt).addListener(Mockito.anyString(), Mockito.any(MqttMessageListener.class));
 
-        String eventsTopic = TopicConstants.topic(TopicConstants.EVENTS, DOCK_SN);
+        String eventsTopic = schema.topic(schema.events(), DOCK_SN);
         Mockito.doAnswer(invocation -> {
             String topic = invocation.getArgument(0);
             Object obj = invocation.getArgument(1);

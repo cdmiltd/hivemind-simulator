@@ -24,15 +24,52 @@ simulator:
   # real-push-enabled: true 启用真实推流（需本机 ffmpeg 支持 WHIP，即 --enable-muxer=whip 编译）
   # ffmpeg-path: ffmpeg 可执行文件路径，默认 "ffmpeg" 从 PATH 查找
   # video-dir: 视频文件目录，按 {camera_index}-{video_type}.mp4 命名查找（如 165-0-7-normal.mp4）
-  # 仅支持 WebRTC (url_type=4)，RTMP/GB28181 降级为协议模拟
+  # 支持 RTMP (url_type=1) 和 WebRTC (url_type=4) 真实推流，Agora (url_type=0)/GB28181 (url_type=3) 降级为协议模拟
   live:
     real-push-enabled: false
     ffmpeg-path: ffmpeg
     video-dir: ""
+    # 直播方式（JSBridge live 模块 video-publish-type）：
+    # video-on-demand/video-by-manual/video-demand-aux-manual
+    video-publish-type: "video-on-demand"
   # 媒体上传配置
   # media-dir: 模拟照片/视频文件目录，媒体上传时从该目录读取文件上传到对象存储。留空则跳过文件上传
+  # auto-upload-photo: 是否自动上传照片
+  # auto-upload-photo-type: 自动上传照片类型 0=原图 1=缩略图
+  # auto-upload-video: 是否自动上传视频
+  # download-owner: 后台自动下载的遥控器 0=本控 1=其他控
   media:
     media-dir: ""
+    auto-upload-photo: false
+    auto-upload-photo-type: 0
+    auto-upload-video: false
+    download-owner: 0
+  # hivemind 云平台 HTTP/WebSocket 接口配置（Pilot 上云专用）
+  # base-url: hivemind HTTP API 基础地址（后续看能否通过 JSBridge 注册获得）
+  # timeout: HTTP 请求超时（毫秒）
+  # token: hivemind 访问令牌（x-auth-token），留空则使用空串
+  # ws-url: hivemind WebSocket 地址（接收地图元素推送、态势感知推送）
+  # ws-token: WebSocket 连接 token（URL 中需 URLEncode）
+  hivemind:
+    http:
+      base-url: ""
+      timeout: 5000
+      token: ""
+    websocket:
+      url: ""
+      token: ""
+  # MOP（Mission Open Platform）数据传输配置（JSBridge mop 模块参数化）
+  # host: MOP WebSocket 地址，留空则跳过连接
+  # token: MOP 平台 token（x-auth-token，URL 中需 URLEncode），留空则使用空串
+  mop:
+    host: ""
+    token: ""
+  # Pilot 上云地图模块配置（JSBridge map 模块参数化）
+  # user-name: 地图元素归属用户名（element.user_name）
+  # element-pre-name: 地图元素名称前缀，便于在多端共享时区分来源
+  map:
+    user-name: ""
+    element-pre-name: ""
 
 # ========================================
 # Web 控制台端口

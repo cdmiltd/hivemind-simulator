@@ -34,7 +34,7 @@ public abstract class AbstractDroneOsdBuilder implements DroneOsdBuilder {
         DeviceState state = ctx.getState();
         Map<String, Object> data = new LinkedHashMap<>();
         // 共用基础飞行字段（所有机型都上报）
-        // 字段对齐 DJI M30/M3D/M4D properties 文档：height=绝对高度(椭球面)，elevation=相对起飞点高度
+        // 字段对齐 DJI M30/M3D/M4D/M400 properties 文档：height=绝对高度(椭球面)，elevation=相对起飞点高度
         data.put(s.convertKey("mode_code"), state.getDroneModeCode());
         data.put(s.convertKey("latitude"), state.getDroneLatitude());
         data.put(s.convertKey("longitude"), state.getDroneLongitude());
@@ -52,12 +52,18 @@ public abstract class AbstractDroneOsdBuilder implements DroneOsdBuilder {
         data.put(s.convertKey("total_flight_time"), (float) state.getFlightTimeSeconds());  // float（M30/M3D/M4D 文档均为 float）
         // TC-BUILDER-014：补齐飞行器 OSD 共用字段（对齐 DJI M4D/M30 文档 + 真机示例）
         data.put(s.convertKey("activation_time"), 1700000000);              // 飞行器激活时间（unix 秒）
-        data.put(s.convertKey("gear"), 1);                                   // 档位：1=P档（M4D/M3D/M30 共用）
+        // firmware_version — 飞行器固件版本（M400 Pilot pushMode=0 在 OSD 上报，M30/M3D/M4D pushMode=1 在 state topic 上报）
+        if (includeFirmwareVersionInOsd()) {
+            data.put(s.convertKey("firmware_version"), "0.0.0.0");
+        }
+        data.put(s.convertKey("gear"), 1);                                   // 档位：1=P档（M4D/M3D/M30/M400 共用）
         data.put(s.convertKey("height_limit"), 120);                         // 飞行器限高（米）
         data.put(s.convertKey("home_distance"), 0.0);                        // 距 Home 点距离
-        // distance_limit_status + rth_altitude（M30/M3D/M4D 共有，pushMode=0, rw）
-        data.put(s.convertKey("distance_limit_status"), buildDistanceLimitStatus(s));
-        data.put(s.convertKey("rth_altitude"), 100);                         // 返航高度（米）
+        // distance_limit_status + rth_altitude（M30/M3D/M4D 共有，pushMode=0, rw；M400 Pilot 属性列表未列）
+        if (includeDistanceLimitFields()) {
+            data.put(s.convertKey("distance_limit_status"), buildDistanceLimitStatus(s));
+            data.put(s.convertKey("rth_altitude"), 100);                     // 返航高度（米）
+        }
         // is_near_area_limit / is_near_height_limit（M30/M3D/M4D 共有，pushMode=0, r）
         data.put(s.convertKey("is_near_area_limit"), 0);    // 0=未达到限飞区
         data.put(s.convertKey("is_near_height_limit"), 0);  // 0=未达到设定的限制高度
@@ -81,6 +87,19 @@ public abstract class AbstractDroneOsdBuilder implements DroneOsdBuilder {
      * @param data 已填充共用字段的 Map，子类直接往里 put 特有字段
      */
     protected abstract void appendDroneSpecific(OsdContext ctx, Map<String, Object> data);
+
+    /**
+     * 是否上报限远/返航高度字段（distance_limit_status/rth_altitude）。
+     * <p>M30/M3D/M4D 属性列表包含这些字段，默认上报。M400 Pilot 属性列表未列，覆盖为 false。</p>
+     * <p>mode_code/gear 不受此钩子控制，所有机型始终上报（pushMode=0 基础飞行字段）。</p>
+     */
+    protected boolean includeDistanceLimitFields() { return true; }
+
+    /**
+     * 是否在 OSD 上报 firmware_version。
+     * <p>M400 Pilot 模式 firmware_version pushMode=0（OSD），其他机型 pushMode=1（state topic）。</p>
+     */
+    protected boolean includeFirmwareVersionInOsd() { return false; }
 
     // ==================== 共用子结构构造 ====================
 

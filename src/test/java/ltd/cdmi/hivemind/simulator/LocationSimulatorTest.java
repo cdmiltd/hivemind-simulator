@@ -27,10 +27,19 @@ import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
 import ltd.cdmi.hivemind.simulator.handler.FfmpegInstaller;
 import ltd.cdmi.hivemind.simulator.handler.FfmpegWhipPusher;
 import ltd.cdmi.hivemind.simulator.handler.FlightCommandSimulator;
+import ltd.cdmi.hivemind.simulator.handler.AirSenseSimulator;
+import ltd.cdmi.hivemind.simulator.handler.FlightAreaSimulator;
+import ltd.cdmi.hivemind.simulator.handler.PsdkSimulator;
+import ltd.cdmi.hivemind.simulator.handler.EsdkSimulator;
+import ltd.cdmi.hivemind.simulator.handler.RemoteLogSimulator;
+import ltd.cdmi.hivemind.simulator.handler.OtaSimulator;
+import ltd.cdmi.hivemind.simulator.handler.UnlockLicenseSimulator;
 import ltd.cdmi.hivemind.simulator.handler.HmsSimulator;
 import ltd.cdmi.hivemind.simulator.handler.LiveStreamSimulator;
 import ltd.cdmi.hivemind.simulator.handler.MediaUploadSimulator;
 import ltd.cdmi.hivemind.simulator.handler.WaylineTaskSimulator;
+import ltd.cdmi.hivemind.simulator.handler.MapElementSimulator;
+import ltd.cdmi.hivemind.simulator.handler.SituationAwarenessSimulator;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
 import ltd.cdmi.hivemind.simulator.web.SimulatorController;
 import org.junit.jupiter.api.Test;
@@ -51,8 +60,11 @@ class LocationSimulatorTest {
         return new SimulatorProperties(
                 new SimulatorProperties.Location(30.67, 104.07, 500.0),
                 new SimulatorProperties.Log(2000),
-                new SimulatorProperties.Live(false, "", ""),
-                new SimulatorProperties.Media("")
+                new SimulatorProperties.Live(false, "", "", null),
+                new SimulatorProperties.Media("", false, 0, false, 0),
+                null,
+                null,
+                null
         );
     }
 
@@ -71,13 +83,25 @@ class LocationSimulatorTest {
                 Mockito.mock(LiveStreamSimulator.class),
                 Mockito.mock(MediaUploadSimulator.class),
                 Mockito.mock(HmsSimulator.class),
+                Mockito.mock(AirSenseSimulator.class),
+                Mockito.mock(FlightAreaSimulator.class),
+                Mockito.mock(UnlockLicenseSimulator.class),
+                Mockito.mock(PsdkSimulator.class),
+                Mockito.mock(EsdkSimulator.class),
+                Mockito.mock(RemoteLogSimulator.class),
+                Mockito.mock(OtaSimulator.class),
                 Mockito.mock(FlightCommandSimulator.class),
                 Mockito.mock(FfmpegWhipPusher.class),
                 Mockito.mock(FfmpegInstaller.class),
                 runtimeConfig,
                 testProps(),
                 Mockito.mock(DiagnosticLogRecorder.class),
-                Mockito.mock(CoverageRecorder.class)
+                Mockito.mock(CoverageRecorder.class),
+                new com.fasterxml.jackson.databind.ObjectMapper(),
+                Mockito.mock(MapElementSimulator.class),
+                Mockito.mock(SituationAwarenessSimulator.class),
+                Mockito.mock(ltd.cdmi.hivemind.simulator.handler.PilotHttpSimulator.class),
+                Mockito.mock(ltd.cdmi.hivemind.simulator.ws.MopClient.class)
         );
     }
 

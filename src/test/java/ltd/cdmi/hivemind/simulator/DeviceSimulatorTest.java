@@ -32,6 +32,7 @@ import ltd.cdmi.hivemind.simulator.device.DockOnlineService;
 import ltd.cdmi.hivemind.simulator.device.M4DDroneOsdBuilder;
 import ltd.cdmi.hivemind.simulator.device.PilotControllerOsdBuilder;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticLogRecorder;
+import ltd.cdmi.hivemind.simulator.mqtt.DockTopicSchema;
 import ltd.cdmi.hivemind.simulator.mqtt.DrcMessage;
 import ltd.cdmi.hivemind.simulator.mqtt.MqttClientManager;
 import org.junit.jupiter.api.Test;
@@ -56,8 +57,11 @@ class DeviceSimulatorTest {
         return new SimulatorProperties(
                 new SimulatorProperties.Location(30.67, 104.07, 500.0),
                 new SimulatorProperties.Log(2000),
-                new SimulatorProperties.Live(false, "", ""),
-                new SimulatorProperties.Media("")
+                new SimulatorProperties.Live(false, "", "", null),
+                new SimulatorProperties.Media("", false, 0, false, 0),
+                null,
+                null,
+                null
         );
     }
 
@@ -80,7 +84,8 @@ class DeviceSimulatorTest {
                 List.of(new Dock3OsdBuilder()),
                 List.of(new M4DDroneOsdBuilder()),
                 List.of(new PilotControllerOsdBuilder()),
-                Mockito.mock(DiagnosticLogRecorder.class));
+                Mockito.mock(DiagnosticLogRecorder.class),
+                new DockTopicSchema());
     }
 
     @Test
@@ -136,7 +141,8 @@ class DeviceSimulatorTest {
                 List.of(new Dock3OsdBuilder()),
                 List.of(new M4DDroneOsdBuilder()),
                 List.of(new PilotControllerOsdBuilder()),
-                Mockito.mock(DiagnosticLogRecorder.class));
+                Mockito.mock(DiagnosticLogRecorder.class),
+                new DockTopicSchema());
 
         simulator.publishOsd();
 
@@ -263,9 +269,10 @@ class DeviceSimulatorTest {
         System.out.println(json);
         System.out.println("=== 消息结束 ===");
 
-        // 验证 DRC 消息格式 {method, data, seq}
+        // 验证 DRC 消息格式 {method, data, timestamp, seq}
         JsonNode node = objectMapper.readTree(json);
         assertEquals("drc_camera_osd_info_push", node.path("method").asText());
+        assertTrue(node.path("timestamp").asLong() > 0);
         assertTrue(node.path("seq").asInt() > 0);
 
         // 验证 6 个顶层字段
@@ -331,7 +338,8 @@ class DeviceSimulatorTest {
                 List.of(new Dock3OsdBuilder()),
                 List.of(new M4DDroneOsdBuilder()),
                 List.of(new PilotControllerOsdBuilder()),
-                Mockito.mock(DiagnosticLogRecorder.class));
+                Mockito.mock(DiagnosticLogRecorder.class),
+                new DockTopicSchema());
 
         simulator.publishOsd();
 
@@ -356,7 +364,8 @@ class DeviceSimulatorTest {
                 List.of(new Dock3OsdBuilder()),
                 List.of(new M4DDroneOsdBuilder()),
                 List.of(new PilotControllerOsdBuilder()),
-                Mockito.mock(DiagnosticLogRecorder.class));
+                Mockito.mock(DiagnosticLogRecorder.class),
+                new DockTopicSchema());
 
         simulator.publishOsd();
 
@@ -380,7 +389,8 @@ class DeviceSimulatorTest {
                 List.of(new Dock3OsdBuilder()),
                 List.of(new M4DDroneOsdBuilder()),
                 List.of(new PilotControllerOsdBuilder()),
-                Mockito.mock(DiagnosticLogRecorder.class));
+                Mockito.mock(DiagnosticLogRecorder.class),
+                new DockTopicSchema());
 
         simulator.publishOsd();
 
@@ -443,7 +453,8 @@ class DeviceSimulatorTest {
                 List.of(new Dock3OsdBuilder()),
                 List.of(new M4DDroneOsdBuilder()),
                 List.of(new PilotControllerOsdBuilder()),
-                Mockito.mock(DiagnosticLogRecorder.class));
+                Mockito.mock(DiagnosticLogRecorder.class),
+                new DockTopicSchema());
         simulator.publishOsd();
 
         String dockSn = testRuntimeConfig().getDockSn();
@@ -498,7 +509,8 @@ class DeviceSimulatorTest {
                 List.of(new Dock3OsdBuilder()),
                 List.of(new M4DDroneOsdBuilder()),
                 List.of(new PilotControllerOsdBuilder()),
-                Mockito.mock(DiagnosticLogRecorder.class));
+                Mockito.mock(DiagnosticLogRecorder.class),
+                new DockTopicSchema());
         simulator.publishOsd();
 
         String droneSn = testRuntimeConfig().getDroneSn();
@@ -539,7 +551,8 @@ class DeviceSimulatorTest {
                 List.of(new Dock3OsdBuilder()),
                 List.of(new M4DDroneOsdBuilder()),
                 List.of(new PilotControllerOsdBuilder()),
-                Mockito.mock(DiagnosticLogRecorder.class));
+                Mockito.mock(DiagnosticLogRecorder.class),
+                new DockTopicSchema());
         simulator.publishOsd();
         ArgumentCaptor<String> captor = ArgumentCaptor.forClass(String.class);
         Mockito.verify(mqtt, Mockito.atLeast(1)).publish(Mockito.anyString(), captor.capture());
@@ -783,7 +796,7 @@ class DeviceSimulatorTest {
         state.setDroneActivated(true);
         DockOnlineService service = new DockOnlineService(
                 testProps(), Mockito.mock(MqttClientManager.class), state,
-                new ObjectMapper(), config, Mockito.mock(DiagnosticLogRecorder.class));
+                new ObjectMapper(), config, Mockito.mock(DiagnosticLogRecorder.class), new DockTopicSchema());
 
         Method method = DockOnlineService.class.getDeclaredMethod("buildUpdateTopoData");
         method.setAccessible(true);
@@ -821,7 +834,7 @@ class DeviceSimulatorTest {
         MqttClientManager mqtt = Mockito.mock(MqttClientManager.class);
         DockOnlineService service = new DockOnlineService(
                 testProps(), mqtt, state,
-                new ObjectMapper(), config, Mockito.mock(DiagnosticLogRecorder.class));
+                new ObjectMapper(), config, Mockito.mock(DiagnosticLogRecorder.class), new DockTopicSchema());
 
         service.publishDroneSleepTopo();
 
@@ -948,7 +961,7 @@ class DeviceSimulatorTest {
         Mockito.when(mqtt.isConnected()).thenReturn(true);
         DockOnlineService service = new DockOnlineService(
                 testProps(), mqtt, state,
-                new ObjectMapper(), config, Mockito.mock(DiagnosticLogRecorder.class));
+                new ObjectMapper(), config, Mockito.mock(DiagnosticLogRecorder.class), new DockTopicSchema());
 
         service.publishDockState();
 
@@ -985,7 +998,7 @@ class DeviceSimulatorTest {
         Mockito.when(mqtt.isConnected()).thenReturn(true);
         DockOnlineService service = new DockOnlineService(
                 testProps(), mqtt, state,
-                new ObjectMapper(), config, Mockito.mock(DiagnosticLogRecorder.class));
+                new ObjectMapper(), config, Mockito.mock(DiagnosticLogRecorder.class), new DockTopicSchema());
 
         service.publishDockState();
 
@@ -1051,7 +1064,7 @@ class DeviceSimulatorTest {
         Mockito.when(mqtt.isConnected()).thenReturn(true);
         DockOnlineService service = new DockOnlineService(
                 testProps(), mqtt, state,
-                new ObjectMapper(), config, Mockito.mock(DiagnosticLogRecorder.class));
+                new ObjectMapper(), config, Mockito.mock(DiagnosticLogRecorder.class), new DockTopicSchema());
 
         service.publishDroneState();
 
@@ -1068,5 +1081,99 @@ class DeviceSimulatorTest {
         assertEquals(28, topo.path("secret_code").size(), "secret_code 长度应为 28");
         assertTrue(topo.has("center_node"), "wireless_link_topo 应包含 center_node");
         assertTrue(topo.has("leaf_nodes"), "wireless_link_topo 应包含 leaf_nodes");
+    }
+
+    // ===== TC-REG-018: airport_bind_status 返回非0 result 停止注册 =====
+
+    @Test
+    void checkBindStatusResultNonZeroFailsAndTransfersCode() throws Exception {
+        DockOnlineService service = newOnlineService();
+        JsonNode reply = new ObjectMapper().readTree("{\"data\":{\"result\":210230}}");
+        DockOnlineService.OnlineResult result = service.checkBindStatusResult(reply);
+        assertFalse(result.success(), "result≠0 应判定为失败");
+        assertEquals("210230", result.code(), "应透传 result 码");
+    }
+
+    @Test
+    void checkBindStatusResultZeroSucceeds() throws Exception {
+        DockOnlineService service = newOnlineService();
+        JsonNode reply = new ObjectMapper().readTree(
+                "{\"data\":{\"result\":0,\"output\":{\"bind_status\":["
+                + "{\"sn\":\"dock-sn\",\"is_device_bind_organization\":true}"
+                + "]}}}");
+        DockOnlineService.OnlineResult result = service.checkBindStatusResult(reply);
+        assertTrue(result.success(), "result=0 应判定为成功");
+        assertEquals("0", result.code());
+    }
+
+    // ===== TC-REG-016: airport_organization_get/bind 返回非0 result 停止注册 =====
+
+    @Test
+    void checkOrgGetResultNonZeroFailsAndTransfersCode() throws Exception {
+        DockOnlineService service = newOnlineService();
+        JsonNode reply = new ObjectMapper().readTree("{\"data\":{\"result\":210229}}");
+        DockOnlineService.OnlineResult result = service.checkOrgGetResult(reply);
+        assertFalse(result.success(), "result=210229 应判定为失败");
+        assertEquals("210229", result.code(), "应透传 result 码");
+    }
+
+    @Test
+    void checkOrgGetResultZeroSucceeds() throws Exception {
+        DockOnlineService service = newOnlineService();
+        JsonNode reply = new ObjectMapper().readTree(
+                "{\"data\":{\"result\":0,\"output\":{\"organization_name\":\"test-org\"}}}");
+        DockOnlineService.OnlineResult result = service.checkOrgGetResult(reply);
+        assertTrue(result.success(), "result=0 应判定为成功");
+        assertEquals("0", result.code());
+    }
+
+    @Test
+    void checkOrgBindResultNonZeroFailsAndTransfersCode() throws Exception {
+        DockOnlineService service = newOnlineService();
+        JsonNode reply = new ObjectMapper().readTree("{\"data\":{\"result\":210230}}");
+        DockOnlineService.OnlineResult result = service.checkOrgBindResult(reply);
+        assertFalse(result.success(), "result≠0 应判定为失败");
+        assertEquals("210230", result.code(), "应透传 result 码");
+    }
+
+    // ===== TC-REG-017: airport_organization_bind 返回 result=0 但 err_infos 非空停止注册 =====
+
+    @Test
+    void checkOrgBindResultZeroWithErrInfosFailsAndTransfersFirstErrCode() throws Exception {
+        DockOnlineService service = newOnlineService();
+        JsonNode reply = new ObjectMapper().readTree(
+                "{\"data\":{\"result\":0,\"output\":{\"err_infos\":["
+                + "{\"err_code\":210231,\"sn\":\"dock-sn\"},"
+                + "{\"err_code\":210232,\"sn\":\"drone-sn\"}"
+                + "]}}}");
+        DockOnlineService.OnlineResult result = service.checkOrgBindResult(reply);
+        assertFalse(result.success(), "err_infos 非空应判定为失败");
+        assertEquals("210231", result.code(), "应透传第一个 err_code");
+    }
+
+    @Test
+    void checkOrgBindResultZeroWithoutErrInfosSucceeds() throws Exception {
+        DockOnlineService service = newOnlineService();
+        JsonNode reply = new ObjectMapper().readTree("{\"data\":{\"result\":0}}");
+        DockOnlineService.OnlineResult result = service.checkOrgBindResult(reply);
+        assertTrue(result.success(), "result=0 且无 err_infos 应判定为成功");
+        assertEquals("0", result.code());
+    }
+
+    @Test
+    void checkOrgBindResultZeroWithEmptyErrInfosSucceeds() throws Exception {
+        DockOnlineService service = newOnlineService();
+        JsonNode reply = new ObjectMapper().readTree(
+                "{\"data\":{\"result\":0,\"output\":{\"err_infos\":[]}}}");
+        DockOnlineService.OnlineResult result = service.checkOrgBindResult(reply);
+        assertTrue(result.success(), "err_infos 为空数组应判定为成功");
+        assertEquals("0", result.code());
+    }
+
+    /** 构造 DockOnlineService 实例（mock MQTT，用于测试回复解析方法） */
+    private DockOnlineService newOnlineService() {
+        return new DockOnlineService(
+                testProps(), Mockito.mock(MqttClientManager.class), new DeviceState(),
+                new ObjectMapper(), testRuntimeConfig(), Mockito.mock(DiagnosticLogRecorder.class), new DockTopicSchema());
     }
 }

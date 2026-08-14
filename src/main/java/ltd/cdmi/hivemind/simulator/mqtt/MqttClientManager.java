@@ -21,6 +21,7 @@ import jakarta.annotation.PreDestroy;
 import ltd.cdmi.hivemind.simulator.config.MqttProperties;
 import ltd.cdmi.hivemind.simulator.config.SimulatorProperties;
 import ltd.cdmi.hivemind.simulator.config.RuntimeConfig;
+import ltd.cdmi.hivemind.simulator.device.DeviceMode;
 import ltd.cdmi.hivemind.simulator.diagnostic.DiagnosticCode;
 import org.eclipse.paho.client.mqttv3.IMqttDeliveryToken;
 import org.eclipse.paho.client.mqttv3.MqttCallbackExtended;
@@ -61,6 +62,7 @@ public class MqttClientManager implements MqttCallbackExtended {
     private final SimulatorProperties props;
     private final ObjectMapper objectMapper;
     private final RuntimeConfig runtimeConfig;
+    private final DockTopicSchema dockTopicSchema;
 
     private volatile MqttClient client;
 
@@ -74,11 +76,12 @@ public class MqttClientManager implements MqttCallbackExtended {
     // 使用 ArrayDeque 而非 ArrayList：pollFirst() 是 O(1)，避免 ArrayList.remove(0) 的 O(n) 元素移动
     private final Deque<Map<String, Object>> messageLogs = new ArrayDeque<>();
 
-    public MqttClientManager(MqttProperties mqttProps, SimulatorProperties props, ObjectMapper objectMapper, RuntimeConfig runtimeConfig) {
+    public MqttClientManager(MqttProperties mqttProps, SimulatorProperties props, ObjectMapper objectMapper, RuntimeConfig runtimeConfig, DockTopicSchema dockTopicSchema) {
         this.mqttProps = mqttProps;
         this.props = props;
         this.objectMapper = objectMapper;
         this.runtimeConfig = runtimeConfig;
+        this.dockTopicSchema = dockTopicSchema;
     }
 
     /**
@@ -102,8 +105,9 @@ public class MqttClientManager implements MqttCallbackExtended {
             // 告知 broker 本客户端的遗嘱：设备下线（QoS 1）
             // DJI 下线通过 update_topo 的空 sub_devices 列表体现，method 字段必须为 update_topo
             String willPayload = "{\"method\":\"update_topo\",\"data\":{\"type\":3,\"sub_type\":0,\"sub_devices\":[],\"thing_version\":\"3.0.0.0\"}}";
+            TopicSchema schema = currentTopicSchema();
             options.setWill(
-                    TopicConstants.topic(TopicConstants.STATUS, runtimeConfig.getDockSn()),
+                    schema.topic(schema.status(), runtimeConfig.getGatewaySn()),
                     willPayload.getBytes(StandardCharsets.UTF_8),
                     1, false);
 
@@ -184,20 +188,22 @@ public class MqttClientManager implements MqttCallbackExtended {
 
     @Override
     public void connectComplete(boolean reconnect, String serverURI) {
-        String dockSn = runtimeConfig.getDockSn();
+        String gatewaySn = runtimeConfig.getGatewaySn();
         if (reconnect) {
             log.info("MQTT 已重连，重新订阅下行 topic");
         } else {
             log.info("MQTT 首次连接成功");
         }
         // 订阅云→设备下行 topic（QoS 1）
+        // Pilot 模式网关为遥控器（controllerSn），Dock 模式网关为机场（dockSn）
+        TopicSchema schema = currentTopicSchema();
         List<String> downTopics = new ArrayList<>();
-        downTopics.add(TopicConstants.topic(TopicConstants.SERVICES, dockSn));
-        downTopics.add(TopicConstants.topic(TopicConstants.PROPERTY_SET, dockSn));
-        downTopics.add(TopicConstants.topic(TopicConstants.EVENTS_REPLY, dockSn));
-        downTopics.add(TopicConstants.topic(TopicConstants.REQUESTS_REPLY, dockSn));
-        downTopics.add(TopicConstants.topic(TopicConstants.STATUS_REPLY, dockSn));
-        downTopics.add(TopicConstants.topic(TopicConstants.DRC_DOWN, dockSn));
+        downTopics.add(dockTopicSchema.topic(dockTopicSchema.services(), gatewaySn));
+        downTopics.add(dockTopicSchema.topic(dockTopicSchema.propertySet(), gatewaySn));
+        downTopics.add(dockTopicSchema.topic(dockTopicSchema.eventsReply(), gatewaySn));
+        downTopics.add(dockTopicSchema.topic(dockTopicSchema.requestsReply(), gatewaySn));
+        downTopics.add(schema.topic(schema.statusReply(), gatewaySn));
+        downTopics.add(dockTopicSchema.topic(dockTopicSchema.drcDown(), gatewaySn));
         for (String topic : downTopics) {
             try {
                 client.subscribe(topic, 1);
@@ -206,6 +212,19 @@ public class MqttClientManager implements MqttCallbackExtended {
                 log.error("订阅失败: {} - {}", topic, e.getMessage());
             }
         }
+    }
+
+    /**
+     * 获取当前模式对应的 TopicSchema。
+     * <p>Pilot 模式（RC Plus 2）使用 {@link PilotTopicSchema}（status/statusReply 走 thing/product 通道），
+     * 其他模式使用 {@link DockTopicSchema}（status/statusReply 走 sys/product 通道）。
+     * <p>osd/state/services/drc 等通道两种模式模板一致，统一用 {@link DockTopicSchema}。
+     */
+    private TopicSchema currentTopicSchema() {
+        if (runtimeConfig.getDeviceMode() == DeviceMode.PILOT) {
+            return new PilotTopicSchema(runtimeConfig.getControllerType());
+        }
+        return dockTopicSchema;
     }
 
     @Override
