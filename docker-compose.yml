@@ -1,0 +1,77 @@
+# ========================================
+# DJI Dock 模拟器 Docker Compose 部署
+# ========================================
+# 包含服务：
+#   - emqx: MQTT Broker（EMQX 5.x）
+#   - simulator: DJI Dock 模拟器
+#
+# 使用方式：
+#   1. 先构建 jar：mvn package -DskipTests
+#   2. 启动服务：docker compose up -d
+#   3. 访问模拟器：http://localhost:9090
+#   4. 访问 EMQX Dashboard：http://localhost:18083（admin/public）
+#   5. 停止服务：docker compose down
+# ========================================
+
+services:
+  emqx:
+    image: emqx/emqx:5.6
+    container_name: emqx
+    ports:
+      - "1883:1883"     # MQTT
+      - "8083:8083"     # WebSocket
+      - "8883:8883"     # MQTTS
+      - "18083:18083"   # Dashboard
+    environment:
+      EMQX_NAME: emqx
+      EMQX_HOST: 127.0.0.1
+      EMQX_DASHBOARD__DEFAULT_USERNAME: admin
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: public
+    volumes:
+      - emqx-data:/opt/emqx/data
+      - emqx-log:/opt/emqx/log
+    networks:
+      - simulator-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dji-dock-simulator
+    ports:
+      - "9090:9090"
+    environment:
+      # MQTT 连接（指向 compose 内的 emqx 服务）
+      MQTT_HOST: emqx
+      MQTT_PORT: 1883
+      # MQTT 凭据（EMQX 默认允许匿名，留空即可；如需认证请在 EMQX Dashboard 配置）
+      MQTT_USERNAME: ""
+      MQTT_PASSWORD: ""
+      # Web 端口
+      SERVER_PORT: 9090
+      # 日志级别（DEBUG=详细启动日志 / INFO=默认 / WARN=精简）
+      LOGGING_LEVEL_LTD_CDMI_HIVEMIND_SIMULATOR: DEBUG
+    depends_on:
+      emqx:
+        condition: service_healthy
+    networks:
+      - simulator-net
+    # 可选：挂载媒体文件和视频文件目录（直播真实推流/媒体上传用）
+    volumes:
+      - ./media:/app/media
+      - ./videos:/app/videos
+    restart: unless-stopped
+
+volumes:
+  emqx-data:
+  emqx-log:
+
+networks:
+  simulator-net:
+    driver: bridge

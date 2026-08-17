@@ -1,0 +1,2154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DJI Dock 机场模拟器</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="stylesheet" href="/vendor/element-plus/index.css">
+    <style>
+        /* ========================================
+         * DJI Dock 模拟器控制台 - 专业工业控制台配色
+         * 深色标题栏 + 浅色内容区 + 天蓝强调色
+         * ======================================== */
+
+        :root {
+            /* 背景色层 */
+            --bg-base: #f0f2f5;
+            --bg-card: #ffffff;
+            --bg-header: #1e293b;
+            --bg-log-hover: #f1f5f9;
+            --bg-payload: #f8fafc;
+
+            /* 文字色层 */
+            --text-primary: #0f172a;
+            --text-secondary: #475569;
+            --text-muted: #94a3b8;
+            --text-inverse: #f8fafc;
+
+            /* 强调色 */
+            --accent: #0ea5e9;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+
+            /* 边框 */
+            --border-light: #e2e8f0;
+
+            /* 阴影 */
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.04);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.06), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+            --shadow-header: 0 2px 8px rgba(15, 23, 42, 0.16);
+
+            /* 圆角 */
+            --radius-md: 6px;
+            --radius-lg: 8px;
+
+            /* 字体 */
+            --font-mono: 'JetBrains Mono', 'SF Mono', 'Consolas', 'Cascadia Code', monospace;
+            --font-body: 'Noto Sans SC', -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+
+            /* Element Plus 变量覆盖 */
+            --el-color-primary: #0ea5e9;
+            --el-color-primary-light-3: #38bdf8;
+            --el-color-primary-light-5: #7dd3fc;
+            --el-color-primary-light-7: #bae6fd;
+            --el-color-primary-light-9: #e0f2fe;
+            --el-color-primary-dark-2: #0284c7;
+            --el-color-success: #10b981;
+            --el-color-danger: #ef4444;
+            --el-color-warning: #f59e0b;
+            --el-border-radius-base: 6px;
+            --el-border-color: #e2e8f0;
+            --el-text-color-primary: #0f172a;
+            --el-text-color-regular: #475569;
+        }
+
+        /* 基础重置 */
+        * { box-sizing: border-box; }
+        html, body { height: 100%; margin: 0; padding: 0; }
+        body {
+            background: var(--bg-base);
+            font-family: var(--font-body);
+            overflow: hidden;
+            color: var(--text-primary);
+            font-size: 14px;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        #app { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+
+        /* ===== 标题栏 - 深色专业控制台 ===== */
+        .app-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            height: 56px;
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            flex-shrink: 0;
+            box-shadow: var(--shadow-header);
+            z-index: 10;
+        }
+        .app-header-left { display: flex; align-items: center; gap: 16px; }
+        .app-header h1 {
+            font-size: 15px;
+            font-weight: 700;
+            margin: 0;
+            color: var(--text-inverse);
+            white-space: nowrap;
+            letter-spacing: 0.5px;
+        }
+        .app-header-right { display: flex; align-items: center; gap: 8px; }
+
+        /* 标题栏状态标签 - 半透明背景适配深色 */
+        .app-header .el-tag {
+            border: none;
+            font-weight: 500;
+            font-size: 12px;
+            height: 24px;
+            line-height: 22px;
+        }
+        /* MQTT 未连接时 plain 样式（无背景色） */
+        .app-header .el-tag.el-tag--info.is-plain {
+            background: transparent;
+            border-color: rgba(148, 163, 184, 0.3);
+            color: var(--text-muted);
+        }
+        /* MQTT 连接失败时红色字体 */
+        .app-header .el-tag.el-tag--danger.is-plain {
+            background: transparent;
+            border-color: rgba(239, 68, 68, 0.4);
+            color: #fca5a5;
+        }
+        /* MQTT 连接中闪烁 */
+        .mqtt-blink { animation: mqtt-blink 1s ease-in-out infinite; }
+        @keyframes mqtt-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        .app-header .el-tag--success {
+            background: rgba(16, 185, 129, 0.15);
+            color: #6ee7b7;
+        }
+        .app-header .el-tag--danger {
+            background: rgba(239, 68, 68, 0.15);
+            color: #fca5a5;
+        }
+        .app-header .el-tag--info {
+            background: rgba(148, 163, 184, 0.15);
+            color: #cbd5e1;
+        }
+
+        /* 标题栏按钮适配 */
+        .app-header .el-button { border-radius: var(--radius-md); font-weight: 500; }
+        .app-header .el-button--small { height: 32px; padding: 0 14px; }
+        /* 默认按钮在深色背景上的半透明样式 */
+        .app-header .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success) {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.15);
+            color: var(--text-inverse);
+        }
+        .app-header .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):hover {
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.25);
+            color: var(--text-inverse);
+        }
+
+        /* ===== 主内容区 ===== */
+        .main-content {
+            flex: 1;
+            display: flex;
+            gap: 16px;
+            padding: 16px;
+            overflow: hidden;
+            min-height: 0;
+        }
+        .left-panel { flex: 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+        .right-panel {
+            flex: 1;
+            overflow-y: auto;
+            min-width: 340px;
+            min-height: 0;
+            padding-right: 4px;
+        }
+
+        /* 自定义滚动条 */
+        .right-panel::-webkit-scrollbar,
+        .log-container::-webkit-scrollbar { width: 6px; }
+        .right-panel::-webkit-scrollbar-track,
+        .log-container::-webkit-scrollbar-track { background: transparent; }
+        .right-panel::-webkit-scrollbar-thumb,
+        .log-container::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+        .right-panel::-webkit-scrollbar-thumb:hover,
+        .log-container::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+        /* ===== 左侧指令窗口 ===== */
+        .panel-card {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            background: var(--bg-card);
+            border: 1px solid var(--border-light);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            min-height: 0;
+            box-shadow: var(--shadow-sm);
+        }
+        .panel-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--border-light);
+            flex-shrink: 0;
+            flex-wrap: nowrap;
+            overflow: hidden;
+        }
+        .panel-header-title {
+            font-weight: 600;
+            margin-right: 4px;
+            white-space: nowrap;
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+        .panel-header-right {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        /* 日志行 */
+        .log-container { flex: 1; overflow-y: auto; min-height: 0; }
+        .log-row {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            padding: 6px 12px;
+            border-bottom: 1px solid var(--border-light);
+            cursor: pointer;
+            transition: background 0.15s ease;
+            line-height: 1.5;
+        }
+        .log-row:hover { background: var(--bg-log-hover); }
+        .log-recv { color: var(--warning); font-weight: 700; }
+        .log-send { color: var(--success); font-weight: 700; }
+        .log-time { color: var(--text-muted); margin-right: 8px; font-size: 11px; }
+        .log-method { color: var(--accent); font-weight: 600; margin-right: 8px; }
+        .log-topic { color: var(--text-secondary); word-break: break-all; }
+        .log-load-more { color: var(--text-muted); padding: 8px; text-align: center; font-size: 11px; border-bottom: 1px solid var(--border); }
+        .log-payload {
+            margin-top: 6px;
+            padding: 8px 12px;
+            background: var(--bg-payload);
+            border-left: 3px solid var(--accent);
+            border-radius: var(--radius-md);
+            white-space: pre-wrap;
+            word-break: break-all;
+            color: var(--text-secondary);
+            font-size: 11px;
+            line-height: 1.6;
+        }
+
+        /* ===== 右侧面板卡片 ===== */
+        .right-card {
+            margin-bottom: 16px;
+            border: 1px solid var(--border-light) !important;
+            border-radius: var(--radius-lg) !important;
+            box-shadow: var(--shadow-sm);
+            overflow: hidden;
+        }
+        .right-card:last-child { margin-bottom: 0; }
+        .right-card .el-card__header {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-light);
+            font-weight: 600;
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+        .right-card .el-card__body { padding: 16px; }
+
+        /* 右侧表单优化 */
+        .right-card .el-form-item { margin-bottom: 14px; }
+        .right-card .el-form-item__label {
+            color: var(--text-secondary);
+            font-weight: 500;
+            font-size: 13px;
+        }
+
+        /* Descriptions 数据展示 */
+        .right-card .el-descriptions__label {
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        .right-card .el-descriptions__content {
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            font-size: 12px;
+        }
+
+        /* 弹窗优化 */
+        .el-dialog { border-radius: var(--radius-lg); }
+        .el-dialog__header {
+            border-bottom: 1px solid var(--border-light);
+            margin-right: 0;
+            padding: 16px 20px;
+        }
+        .el-dialog__title { font-weight: 600; font-size: 15px; }
+        .el-dialog__body { padding: 20px; }
+        .el-dialog__footer { border-top: 1px solid var(--border-light); padding: 12px 20px; }
+
+        /* 直播推流标签 */
+        .right-card .el-tag--success {
+            background: rgba(16, 185, 129, 0.1);
+            border-color: rgba(16, 185, 129, 0.2);
+            color: var(--success);
+        }
+
+        /* 页面跳转链接 */
+        .nav-link {
+            color: rgba(255, 255, 255, 0.6);
+            text-decoration: none;
+            font-size: 12px;
+            padding: 4px 10px;
+            border-radius: var(--radius-md);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .nav-link:hover {
+            color: var(--text-inverse);
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        /* 右侧面板 Descriptions 标签宽度 */
+        .right-card .el-descriptions__label {
+            width: 110px;
+            white-space: nowrap;
+        }
+
+        /* Dock 面板 Tab 分组 */
+        .dock-tabs .el-tabs__header { margin-bottom: 12px; }
+        .dock-tabs .el-tabs__nav-wrap { padding: 0 4px; }
+        .dock-tabs .el-tabs__item { font-size: 13px; font-weight: 500; }
+        .dock-tabs .el-tab-pane { padding-bottom: 4px; }
+        .dock-tabs .right-card { margin-bottom: 12px; }
+        .dock-tabs .right-card:last-child { margin-bottom: 0; }
+
+        /* ===== MQTT 消息详情抽屉 ===== */
+        .msg-detail-drawer .el-drawer__body {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            padding-bottom: 0;
+        }
+        .msg-drawer-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+        }
+        .msg-drawer-title { font-weight: 600; font-size: 15px; }
+        .msg-drawer-body {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            min-height: 0;
+            gap: 12px;
+            padding: 0 4px;
+            overflow: hidden;
+        }
+        .msg-meta { flex-shrink: 0; }
+        .msg-meta .el-descriptions__content {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            word-break: break-all;
+        }
+        .msg-code-wrap {
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .msg-truncated-tip { flex-shrink: 0; }
+        .msg-code {
+            flex: 1;
+            margin: 0;
+            padding: 14px 16px;
+            background: #1e293b;
+            border-radius: var(--radius-md);
+            color: #e2e8f0;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            line-height: 1.6;
+            overflow: auto;
+            white-space: pre;
+            tab-size: 2;
+            /* 确保代码框内文本可手动选择复制（不被 Element Plus 抽屉样式覆盖） */
+            -webkit-user-select: text;
+            user-select: text;
+            cursor: text;
+        }
+        .msg-code::-webkit-scrollbar { width: 8px; height: 8px; }
+        .msg-code::-webkit-scrollbar-track { background: transparent; }
+        .msg-code::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        .msg-code::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+        /* JSON 语法高亮（Material Theme 配色，适配深色背景） */
+        .json-key { color: #82AAFF; }
+        .json-string { color: #C3E88D; }
+        .json-number { color: #F78C6C; }
+        .json-boolean { color: #C792EA; }
+        .json-null { color: #C792EA; }
+
+        /* 日志行选中高亮 */
+        .log-row.log-row-active {
+            background: #e0f2fe;
+            border-left: 3px solid var(--accent);
+            padding-left: 9px;
+        }
+
+        /* v-cloak：Vue 挂载前隐藏模板，避免未样式化内容闪烁 */
+        [v-cloak]{display:none}
+        /* 加载占位：CSS/JS 加载期间显示，不依赖外部资源 */
+        .app-loading{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#f0f2f5;flex-direction:column;gap:16px;z-index:9999}
+        .app-loading-spinner{width:32px;height:32px;border:3px solid #e2e8f0;border-top-color:#0ea5e9;border-radius:50%;animation:spin 0.8s linear infinite}
+        .app-loading-text{color:#475569;font-size:14px;font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif}
+        @keyframes spin{to{transform:rotate(360deg)}}
+    </style>
+</head>
+<body>
+<div id="app-loading" class="app-loading">
+    <div class="app-loading-spinner"></div>
+    <div class="app-loading-text">加载中…</div>
+</div>
+<div id="app" v-cloak>
+    <!-- Title 栏 -->
+    <div class="app-header">
+        <div class="app-header-left">
+            <h1>{{ connConfig.device_mode === 'PILOT' ? 'DJI Pilot 飞行器模拟器' : 'DJI Dock 机场模拟器' }}</h1>
+            <el-tag :type="mqttConnected ? 'success' : (mqttError ? 'danger' : 'info')" size="small" :effect="mqttConnected ? 'light' : 'plain'" :class="{'mqtt-blink': connecting}">MQTT: {{ mqttConnected ? '已连接' : (connecting ? '连接中' : '未连接') }}</el-tag>
+            <el-tag :type="online ? 'success' : 'info'" size="small">设备: {{ online ? '在线' : '离线' }}</el-tag>
+        </div>
+        <div class="app-header-right">
+            <el-button :type="powered ? 'danger' : 'success'" size="small" @click="powered ? doPowerOff() : doPowerOn()" :loading="connecting">{{ powered ? '关机' : '开机' }}</el-button>
+            <el-button size="small" @click="showDeviceInfoDialog = true">{{ connConfig.device_mode === 'PILOT' ? '遥控器属性' : '机场属性' }}</el-button>
+            <el-button type="primary" size="small" @click="showRegisterDialog = true" :disabled="!powered">注册到第三方平台</el-button>
+            <el-button size="small" @click="showDiagnosticDialog = true">诊断日志</el-button>
+            <el-button size="small" @click="openCoverageDialog">覆盖率报告</el-button>
+            <a href="/monitor.html" class="nav-link">监控器</a>
+        </div>
+    </div>
+
+    <!-- 主页面：左右布局 -->
+    <div class="main-content">
+        <!-- 左侧：指令通讯窗口 -->
+        <div class="left-panel">
+            <div class="panel-card">
+                <div class="panel-header">
+                    <span class="panel-header-title">指令通讯窗口</span>
+                    <el-select v-model="topicFilter" multiple collapse-tags collapse-tags-tooltip size="small" placeholder="过滤 Topic（选中不显示）" style="width: 200px;">
+                        <el-option v-for="t in topicOptions" :key="t" :label="t" :value="t"></el-option>
+                    </el-select>
+                    <div class="panel-header-right">
+                        <el-radio-group v-model="logFilter" size="small">
+                            <el-radio-button label="all">全部</el-radio-button>
+                            <el-radio-button label="recv">收</el-radio-button>
+                            <el-radio-button label="send">发</el-radio-button>
+                        </el-radio-group>
+                        <el-switch v-model="autoScroll" active-text="自动滚动" size="small"></el-switch>
+                        <el-button size="small" @click="clearLogs">清空</el-button>
+                        <el-button size="small" @click="downloadLogFile">下载日志</el-button>
+                    </div>
+                </div>
+                <div class="log-container" ref="logContainer" @scroll="onLogScroll">
+                    <div v-if="loadingHistory" class="log-load-more">加载中...</div>
+                    <div v-else-if="hasMoreHistory && filteredLogs.length > 0" class="log-load-more">上拉加载更多历史消息</div>
+                    <div v-else-if="!hasMoreHistory && historyLogs.length > 0" class="log-load-more">没有更多历史消息</div>
+                    <div v-for="(log, i) in filteredLogs" :key="(log.ts || '') + '-' + (log.topic || '') + '-' + i" class="log-row" :class="{'log-row-active': currentMessage && currentMessage._index === i}" @click="openMessageDetail(i)">
+                        <span class="log-time">{{ log.time }}</span>
+                        <span :class="log.direction === 'recv' ? 'log-recv' : 'log-send'">[{{ log.direction === 'recv' ? '收' : '发' }}]</span>
+                        <span class="log-method">{{ log.method }}</span>
+                        <span class="log-topic">{{ log.topic }}</span>
+                    </div>
+                    <div v-if="filteredLogs.length === 0" style="color: #909399; padding: 24px; text-align: center;">暂无通讯消息</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧：Dock/Pilot 面板（按设备模式分发到独立组件，原内联模板已迁移到 panels/dock-panel.js 和 panels/pilot-panel.js） -->
+        <div class="right-panel">
+            <dock-panel v-if="connConfig.device_mode === 'DOCK'"></dock-panel>
+            <pilot-panel v-else></pilot-panel>
+        </div>
+    </div>
+
+    <!-- 注册到第三方平台 弹窗 -->
+    <el-dialog v-model="showRegisterDialog" title="注册到第三方平台" width="460px">
+        <el-form label-width="90px" size="small">
+            <el-form-item label="接入模式">
+                <el-radio-group v-model="connConfig.device_mode" @change="onDeviceModeChange">
+                    <el-radio-button label="DOCK">机场上云</el-radio-button>
+                    <el-radio-button label="PILOT">飞行器上云</el-radio-button>
+                </el-radio-group>
+            </el-form-item>
+
+            <!-- Dock 模式：机场类型 + 飞行器类型 -->
+            <template v-if="connConfig.device_mode === 'DOCK'">
+                <el-form-item label="机场类型">
+                    <el-select v-model="connConfig.dock_type" @change="onDockTypeChange" placeholder="选择机场类型" style="width: 100%;">
+                        <el-option v-for="o in dockTypeOptions" :key="o.value" :label="o.label" :value="o.value"></el-option>
+                    </el-select>
+                </el-form-item>
+                <el-form-item label="飞行器类型">
+                    <el-select v-model="connConfig.drone_type" placeholder="选择飞行器类型" style="width: 100%;">
+                        <el-option v-for="o in droneTypeOptions" :key="o.value" :label="o.label" :value="o.value"></el-option>
+                    </el-select>
+                </el-form-item>
+            </template>
+
+            <!-- Pilot 模式：遥控器类型 + 飞行器类型 -->
+            <template v-else>
+                <el-form-item label="遥控器类型">
+                    <el-select v-model="connConfig.controller_type" @change="onControllerTypeChange" placeholder="选择遥控器类型" style="width: 100%;">
+                        <el-option v-for="o in controllerTypeOptions" :key="o.value" :label="o.label" :value="o.value"></el-option>
+                    </el-select>
+                </el-form-item>
+                <el-form-item label="飞行器类型">
+                    <el-select v-model="connConfig.drone_type" @change="onDroneTypeChange" placeholder="选择飞行器类型" style="width: 100%;">
+                        <el-option v-for="o in pilotDroneTypeOptions" :key="o.value" :label="o.label" :value="o.value"></el-option>
+                    </el-select>
+                </el-form-item>
+                <el-form-item label="相机负载" v-if="payloadOptions.length > 0">
+                    <el-select v-model="connConfig.selected_payload" placeholder="选择挂载负载" style="width: 100%;">
+                        <el-option v-for="o in payloadOptions" :key="o.value" :label="o.label" :value="o.value"></el-option>
+                    </el-select>
+                </el-form-item>
+            </template>
+
+            <!-- Dock 模式专属：License + 组织ID + 绑定码 -->
+            <template v-if="connConfig.device_mode === 'DOCK'">
+                <el-form-item v-if="!licenseLocked" label="DJI License">
+                    <el-input v-model="connConfig.app_license" placeholder="留空则不模拟 License 认证"></el-input>
+                    <div style="font-size: 12px; color: #909399; line-height: 1.4; margin-top: 4px;">不填写则后端跳过 License 校验，适用于调试阶段</div>
+                </el-form-item>
+                <el-form-item v-else label="DJI License">
+                    <el-tag type="success" size="small">已锁定（首次注册后无需再次输入）</el-tag>
+                </el-form-item>
+                <el-form-item label="组织ID">
+                    <el-input v-model="connConfig.organization_id" placeholder="如 default-org"></el-input>
+                </el-form-item>
+                <el-form-item label="绑定码">
+                    <el-input v-model="connConfig.device_binding_code" placeholder="设备绑定码"></el-input>
+                </el-form-item>
+            </template>
+
+            <!-- Pilot 模式提示：跳过注册流程 -->
+            <el-form-item v-else label="注册流程">
+                <el-tag type="info" size="small">Pilot 模式跳过注册，MQTT 连接后直接上线</el-tag>
+            </el-form-item>
+
+            <!-- 公共字段：MQTT 配置 -->
+            <el-form-item label="MQTT地址">
+                <el-input v-model="connConfig.mqtt_address" placeholder="如 127.0.0.1:1883"></el-input>
+            </el-form-item>
+            <el-form-item label="MQTT账号">
+                <el-input v-model="connConfig.mqtt_username" placeholder="MQTT 用户名"></el-input>
+            </el-form-item>
+            <el-form-item label="MQTT密码">
+                <el-input v-model="connConfig.mqtt_password" type="password" show-password placeholder="留空则不修改"></el-input>
+            </el-form-item>
+        </el-form>
+        <div v-if="connecting" style="margin: 8px 0; padding: 8px 12px; background: #f0f9ff; border-radius: 4px; color: #475569; font-size: 13px; line-height: 1.6;">
+            正在注册到第三方平台...（流程：config → 绑定状态 → 组织查询 → 设备绑定 → 上线，预计 10-40 秒）
+        </div>
+        <template #footer>
+            <el-button @click="showRegisterDialog = false">取消</el-button>
+            <el-button type="primary" @click="doRegister" :loading="connecting">确认注册</el-button>
+        </template>
+    </el-dialog>
+
+    <!-- 设备属性 弹窗 -->
+    <el-dialog v-model="showDeviceInfoDialog" :title="connConfig.device_mode === 'PILOT' ? '遥控器属性' : '机场属性'" width="420px">
+        <el-descriptions :column="1" border size="small">
+            <template v-if="connConfig.device_mode === 'PILOT'">
+                <el-descriptions-item label="遥控器 SN">{{ deviceInfo.controllerSn || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="Drone SN">{{ deviceInfo.droneSn || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="遥控器型号">{{ deviceInfo.controllerModelKey ? controllerModelName(deviceInfo.controllerModelKey) + ' (' + deviceInfo.controllerModelKey + ')' : '-' }}</el-descriptions-item>
+                <el-descriptions-item label="无人机型号">{{ deviceInfo.droneModelKey ? droneModelName(deviceInfo.droneModelKey) + ' (' + deviceInfo.droneModelKey + ')' : '-' }}</el-descriptions-item>
+                <el-descriptions-item label="物模型版本">{{ deviceInfo.thingVersion || '-' }}</el-descriptions-item>
+            </template>
+            <template v-else>
+                <el-descriptions-item label="Dock SN">{{ deviceInfo.dockSn || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="Drone SN">{{ deviceInfo.droneSn || '-' }}</el-descriptions-item>
+                <el-descriptions-item label="机场型号">{{ deviceInfo.dockModelKey ? dockModelName(deviceInfo.dockModelKey) + ' (' + deviceInfo.dockModelKey + ')' : '-' }}</el-descriptions-item>
+                <el-descriptions-item label="无人机型号">{{ deviceInfo.droneModelKey ? droneModelName(deviceInfo.droneModelKey) + ' (' + deviceInfo.droneModelKey + ')' : '-' }}</el-descriptions-item>
+                <el-descriptions-item label="物模型版本">{{ deviceInfo.thingVersion || '-' }}</el-descriptions-item>
+            </template>
+        </el-descriptions>
+    </el-dialog>
+
+    <!-- 诊断日志 弹窗 -->
+    <el-dialog v-model="showDiagnosticDialog" title="诊断日志（S/P/M）" width="780px" @open="loadDiagnosticLogs">
+        <div style="margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;">
+            <el-radio-group v-model="diagnosticFilter" size="small" @change="loadDiagnosticLogs">
+                <el-radio-button label="all">全部</el-radio-button>
+                <el-radio-button label="platform">P 类（平台）</el-radio-button>
+                <el-radio-button label="simulator">S 类（模拟器）</el-radio-button>
+                <el-radio-button label="monitor">M 类（待验证）</el-radio-button>
+            </el-radio-group>
+            <el-button size="small" @click="loadDiagnosticLogs">刷新</el-button>
+        </div>
+        <el-table :data="filteredDiagnosticLogs" size="small" max-height="420" border style="width: 100%">
+            <el-table-column prop="time" label="时间" width="100"></el-table-column>
+            <el-table-column prop="code" label="诊断码" width="70"></el-table-column>
+            <el-table-column prop="method" label="Method" width="160" show-overflow-tooltip></el-table-column>
+            <el-table-column prop="description" label="描述" width="140" show-overflow-tooltip></el-table-column>
+            <el-table-column prop="detail" label="详情" show-overflow-tooltip></el-table-column>
+        </el-table>
+        <div v-if="diagnosticLogs.length === 0" style="text-align: center; padding: 20px; color: #94a3b8;">
+            暂无诊断日志
+        </div>
+    </el-dialog>
+
+    <!-- 覆盖率报告 弹窗 -->
+    <el-dialog v-model="showCoverageDialog" title="DJI Cloud API 覆盖率报告" width="560px" @open="loadCoverageHosts">
+        <div style="margin-bottom: 16px;">
+            <div style="font-size: 13px; color: #475569; margin-bottom: 8px;">选择 MQTT 地址（每个第三方平台一份报告）：</div>
+            <el-select v-model="coverageSelectedHost" placeholder="请选择" style="width: 100%" @change="loadCoverageData">
+                <el-option v-for="h in coverageHosts" :key="h" :label="h" :value="h"></el-option>
+            </el-select>
+        </div>
+        <div v-if="coverageData" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 16px;">
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; text-align: center;">
+                <div>
+                    <div style="font-size: 22px; font-weight: 700; color: #0ea5e9;">{{ coverageData.total_count }}</div>
+                    <div style="font-size: 12px; color: #64748b;">基准总数</div>
+                </div>
+                <div>
+                    <div style="font-size: 22px; font-weight: 700; color: #10b981;">{{ coverageData.covered_count }}</div>
+                    <div style="font-size: 12px; color: #64748b;">已覆盖</div>
+                </div>
+                <div>
+                    <div style="font-size: 22px; font-weight: 700; color: #ef4444;">{{ coverageData.total_count - coverageData.covered_count }}</div>
+                    <div style="font-size: 12px; color: #64748b;">未覆盖</div>
+                </div>
+                <div>
+                    <div style="font-size: 22px; font-weight: 700; color: #f59e0b;">{{ coverageRateText }}</div>
+                    <div style="font-size: 12px; color: #64748b;">覆盖率</div>
+                </div>
+            </div>
+            <div v-if="coverageData.unknown_count > 0" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e2e8f0; font-size: 12px; color: #92400e;">
+                发现 {{ coverageData.unknown_count }} 个非规范 method（不在 DJI 标准内），详见报告
+            </div>
+        </div>
+        <div v-if="coverageSelectedHost && coverageData" style="margin-top: 16px; text-align: right;">
+            <el-button type="primary" size="small" @click="downloadCoverageReport">下载 HTML 报告</el-button>
+        </div>
+        <div v-if="coverageHosts.length === 0" style="text-align: center; padding: 20px; color: #94a3b8;">
+            暂无覆盖率数据（需先连接第三方平台并接收下行指令）
+        </div>
+    </el-dialog>
+
+    <!-- 直播推流配置弹窗（运行时热加载，无需重启） -->
+    <el-dialog v-model="showLiveConfigDialog" title="直播推流配置" width="680px">
+        <el-form label-width="110px" label-position="right">
+            <el-form-item label="启用真实推流">
+                <el-switch v-model="liveConfigEdit.realPushEnabled"></el-switch>
+                <span style="margin-left: 8px; font-size: 12px; color: #909399;">关闭=仅协议模拟（默认）</span>
+            </el-form-item>
+            <el-form-item label="FFmpeg 路径">
+                <div style="display: flex; gap: 8px; width: 100%;">
+                    <el-input v-model="liveConfigEdit.ffmpegPath" placeholder="如 C:\ffmpeg\bin\ffmpeg.exe 或 ffmpeg"></el-input>
+                    <el-button type="primary" plain size="small" :loading="installingFfmpeg"
+                               @click="installFfmpeg" style="flex-shrink: 0;">
+                        {{ installingFfmpeg ? '安装中...' : '一键安装' }}
+                    </el-button>
+                </div>
+            </el-form-item>
+            <el-form-item label="视频文件目录">
+                <el-input v-model="liveConfigEdit.videoDir" placeholder="如 D:/videos"></el-input>
+            </el-form-item>
+        </el-form>
+
+        <!-- 媒体上传配置 -->
+        <el-divider content-position="left" style="margin: 16px 0 8px;">媒体上传</el-divider>
+        <el-form label-width="110px" label-position="right">
+            <el-form-item label="媒体文件目录">
+                <el-input v-model="liveConfigEdit.mediaDir" placeholder="如 D:/media（留空则仅上报元数据，不上传真实文件）"></el-input>
+            </el-form-item>
+        </el-form>
+
+        <!-- 安装进度面板 -->
+        <div v-if="installingFfmpeg" class="install-progress-panel"
+             style="margin-top: 8px; border: 1px solid #dcdfe6; border-radius: 4px; padding: 8px 12px; max-height: 180px; overflow-y: auto; background: #fafafa; font-size: 12px; font-family: Consolas, 'Courier New', monospace;">
+            <div style="margin-bottom: 6px; color: #409eff; font-weight: bold;">
+                安装中... 已等待 {{ installElapsed }}s
+            </div>
+            <div v-for="(line, i) in installProgress" :key="i" style="color: #606266; line-height: 1.6; white-space: pre-wrap; word-break: break-all;">
+                {{ line }}
+            </div>
+        </div>
+        <el-collapse style="margin-top: 8px;">
+            <el-collapse-item title="如何安装 FFmpeg？（RTMP 推流只需普通版）" name="ffmpeg">
+                <div style="font-size: 13px; color: #606266; line-height: 1.8;">
+                    <p style="margin: 4px 0;"><b>两种推流协议：</b></p>
+                    <ul style="margin: 4px 0 4px 20px;">
+                        <li><b>RTMP</b>（url_type=1）：普通 ffmpeg 即支持，安装简单，第三方平台可转 WebRTC</li>
+                        <li><b>WebRTC/WHIP</b>（url_type=4）：需 ffmpeg ≥8.0 且 <code>--enable-muxer=whip</code> 编译，安装复杂</li>
+                    </ul>
+                    <p style="margin: 4px 0;"><b>RTMP 推流（推荐，足够验证完整链路）：</b></p>
+                    <ul style="margin: 4px 0 4px 20px;">
+                        <li>Windows：<code>winget install ffmpeg</code> 或从 <code>ffmpeg.org/download</code> 下载预编译版</li>
+                        <li>验证：命令行执行 <code>ffmpeg -muxers | findstr flv</code>，输出含 <code>flv</code> 即支持 RTMP</li>
+                    </ul>
+                    <p style="margin: 4px 0;"><b>WebRTC 直推（可选，仅平台不支持 RTMP 转换时需要）：</b></p>
+                    <ul style="margin: 4px 0 4px 20px;">
+                        <li>需自行编译：<code>./configure --enable-muxer=whip --enable-libx264 --enable-libopus ...</code></li>
+                        <li>验证：<code>ffmpeg -muxers | findstr whip</code></li>
+                        <li>大多数预编译版（含 ffmpeg.org 官方 release）<b>不支持</b> WHIP</li>
+                    </ul>
+                    <p style="margin: 4px 0;"><b>路径填写：</b></p>
+                    <ul style="margin: 4px 0 4px 20px;">
+                        <li>填写 ffmpeg 可执行文件的完整路径，如 <code>C:\ffmpeg\bin\ffmpeg.exe</code></li>
+                        <li>若 ffmpeg 已加入系统 PATH，直接填 <code>ffmpeg</code> 即可</li>
+                    </ul>
+                    <p style="margin: 4px 0; color: #67c23a;">提示：若第三方平台支持 RTMP→WebRTC 转换，安装普通版 ffmpeg 后选择 RTMP 推流即可验证完整链路。</p>
+                </div>
+            </el-collapse-item>
+            <el-collapse-item title="视频文件如何准备？" name="video">
+                <div style="font-size: 13px; color: #606266; line-height: 1.8;">
+                    <p style="margin: 4px 0;"><b>视频格式要求：</b>mp4 格式，H264 编码。RTMP 推流无音频要求；WHIP 推流建议含音频轨道。</p>
+                    <p style="margin: 4px 0;"><b>最简方式（推荐）：</b>在目录中放一个 <code>default.mp4</code> 文件，所有推流都会使用它，无需关心命名规则。</p>
+                    <p style="margin: 4px 0;"><b>进阶方式（按相机区分视频）：</b>按 <code>{camera_index}-{video_type}.mp4</code> 命名</p>
+                    <ul style="margin: 4px 0 4px 20px;">
+                        <li><code>camera_index</code>：DJI 设备的 payload_index，格式为 type-subtype-gimbalindex，如 <code>165-0-7</code></li>
+                        <li><code>video_type</code>：镜头类型，取值 normal（普通）/ zoom（变焦）/ wide（广角）/ ir（红外）</li>
+                        <li>示例：<code>165-0-7-normal.mp4</code>、<code>165-0-7-zoom.mp4</code></li>
+                        <li>找不到匹配文件时自动回退到 <code>default.mp4</code></li>
+                    </ul>
+                    <p style="margin: 4px 0;"><b>camera_index 从哪获取：</b>第三方平台下发 <code>live_start_push</code> 时，<code>video_id</code> 字段格式为 <code>{sn}/{camera_index}/{video_type}-{index}</code>，模拟器从中解析 camera_index 匹配文件。用户无需手动查找。</p>
+                    <p style="margin: 4px 0;"><b>目录示例：</b></p>
+                    <pre style="background: #f4f4f5; padding: 8px; border-radius: 4px; font-size: 12px; margin: 4px 0;">D:/videos/
+├── default.mp4          ← 通用回退（最简，推荐先放这个）
+├── 165-0-7-normal.mp4   ← 相机165-0-7 普通镜头
+└── 165-0-7-zoom.mp4     ← 相机165-0-7 变焦镜头</pre>
+                </div>
+            </el-collapse-item>
+            <el-collapse-item title="媒体文件如何准备？" name="media">
+                <div style="font-size: 13px; color: #606266; line-height: 1.8;">
+                    <p style="margin: 4px 0;"><b>媒体上传流程：</b>航线任务完成后，模拟器自动执行 storage_config_get 获取 STS 凭证 → 从本目录读取文件上传到对象存储 → 发 file_upload_callback 通知平台。</p>
+                    <p style="margin: 4px 0;"><b>支持的文件格式：</b>jpg / jpeg / png / dng / tif / tiff / mp4 / mov / avi</p>
+                    <p style="margin: 4px 0;"><b>最简方式：</b>在目录中放几张照片（如 photo1.jpg、photo2.jpg），模拟器会循环使用。</p>
+                    <p style="margin: 4px 0; color: #e6a23c;"><b>降级策略：</b>目录留空或 STS 凭证获取失败时，仅发 file_upload_callback（元数据上报），object_key 指向不存在的文件。平台可验证 MQTT 协议但无法下载真实文件。</p>
+                    <p style="margin: 4px 0; color: #67c23a;">提示：配置后无需重启，点击"保存并检测"即生效。与直播推流共享同一持久化配置。</p>
+                </div>
+            </el-collapse-item>
+            <el-collapse-item title="配置说明" name="note">
+                <div style="font-size: 13px; color: #606266; line-height: 1.8;">
+                    <p style="margin: 4px 0;">配置修改后点击"保存并检测"将自动重新检测 ffmpeg 能力，<b>无需重启应用</b>。</p>
+                    <p style="margin: 4px 0;">若本机 ffmpeg 不支持 WHIP，可先安装支持 WHIP 的 ffmpeg，再修改路径后保存。</p>
+                    <p style="margin: 4px 0;">仅支持 WebRTC (url_type=4)，RTMP/GB28181 降级为协议模拟。</p>
+                </div>
+            </el-collapse-item>
+        </el-collapse>
+
+        <!-- 保存后的验证结果反馈 -->
+        <el-alert v-if="liveConfigSaveResult"
+                  :title="liveConfigSaveResult.message"
+                  :type="liveConfigSaveResult.type"
+                  :closable="false"
+                  show-icon
+                  style="margin-top: 12px;"></el-alert>
+
+        <template #footer>
+            <el-button @click="showLiveConfigDialog = false">关闭</el-button>
+            <el-button type="primary" @click="saveLiveConfig">保存并检测</el-button>
+        </template>
+    </el-dialog>
+
+    <!-- 高德地图配置弹窗 -->
+    <el-dialog v-model="showAmapConfigDialog" title="高德地图配置" width="480px">
+        <el-alert type="info" :closable="false" show-icon style="margin-bottom: 16px;">
+            <template #title>如何申请高德地图 JS API Key</template>
+            <div style="font-size: 12px; line-height: 1.8; color: #606266;">
+                <div>1. 访问 <a href="https://lbs.amap.com/" target="_blank" style="color: var(--accent);">高德开放平台</a> 注册账号</div>
+                <div>2. 进入「应用管理 → 我的应用 → 创建新应用」</div>
+                <div>3. 应用类型选择 <strong>Web端(JS API)</strong>，创建后获取 Key</div>
+                <div>4. 如需安全密钥：在应用详情页获取「安全密钥」(securityJsCode)</div>
+                <div>5. 将 Key 和安全密钥填入下方并保存</div>
+            </div>
+        </el-alert>
+        <el-form label-width="90px" size="small">
+            <el-form-item label="JS API Key">
+                <el-input v-model="amapKey" placeholder="高德 JS API Key"></el-input>
+            </el-form-item>
+            <el-form-item label="安全密钥">
+                <el-input v-model="amapSecurityCode" placeholder="安全密钥（可选）"></el-input>
+            </el-form-item>
+        </el-form>
+        <template #footer>
+            <el-button v-if="amapKeyApplied" @click="clearAmapKey">清除</el-button>
+            <el-button @click="showAmapConfigDialog = false">取消</el-button>
+            <el-button type="primary" @click="saveAmapKey">保存</el-button>
+        </template>
+    </el-dialog>
+
+    <!-- MQTT 消息详情抽屉（右侧弹出，格式化显示 JSON） -->
+    <el-drawer v-model="showMsgDrawer" class="msg-detail-drawer" title="MQTT 消息详情" direction="rtl" size="560px" :destroy-on-close="true">
+        <template #header>
+            <div class="msg-drawer-header">
+                <span class="msg-drawer-title">MQTT 消息详情</span>
+                <el-button v-if="currentMessage" size="small" text @click="copyPayload">复制 JSON</el-button>
+            </div>
+        </template>
+        <div v-if="currentMessage" class="msg-drawer-body">
+            <el-descriptions :column="1" border size="small" class="msg-meta">
+                <el-descriptions-item label="时间">{{ currentMessage.time }}</el-descriptions-item>
+                <el-descriptions-item label="方向">
+                    <el-tag :type="currentMessage.direction === 'recv' ? 'warning' : 'success'" size="small">
+                        {{ currentMessage.direction === 'recv' ? '收（平台 → 设备）' : '发（设备 → 平台）' }}
+                    </el-tag>
+                </el-descriptions-item>
+                <el-descriptions-item label="Topic">{{ currentMessage.topic }}</el-descriptions-item>
+                <el-descriptions-item label="Method">{{ currentMessage.method || '-' }}</el-descriptions-item>
+            </el-descriptions>
+            <div class="msg-code-wrap">
+                <div v-if="payloadTruncated" class="msg-truncated-tip">
+                    <el-alert type="warning" :closable="false" show-icon title="payload 非合法 JSON，以下为原始文本"></el-alert>
+                </div>
+                <pre class="msg-code" v-html="formattedPayload"></pre>
+            </div>
+        </div>
+    </el-drawer>
+
+</div>
+
+<script src="/vendor/vue/vue.global.prod.js"></script>
+<script src="/vendor/element-plus/index.full.min.js"></script>
+<script src="/panels/dock-panel.js"></script>
+<script src="/panels/pilot-panel.js"></script>
+<script src="/panels/pilot-status.js"></script>
+<script src="/panels/pilot-live.js"></script>
+<script src="/panels/pilot-cloud.js"></script>
+<script src="/panels/pilot-config.js"></script>
+<script src="/panels/pilot-jsbridge-tabs.js"></script>
+<script>
+const { createApp, ref, reactive, computed, onMounted, onUnmounted, nextTick, watch, provide, inject } = Vue;
+
+const app = createApp({
+    setup() {
+        const mqttConnected = ref(false);
+        const online = ref(false);
+        const state = ref({});
+        const editState = reactive({
+            batteryPercent: 100,
+            dockTemperature: 25,
+            dockHumidity: 50,
+            windSpeed: 3,
+            coverOpen: false,
+            droneInDock: true,
+            droneActivated: false,
+            silentMode: 0,
+            controllerCapacity: 100,  // Pilot 模式遥控器电量
+        });
+        const task = ref({});
+        const streams = ref([]);
+        const liveCapability = ref(null);
+        const media = ref([]);
+
+        // 机场位置（用户手动输入经纬度+高度，持久化到后端配置文件）
+        const locationEdit = reactive({ latitude: 30.670815, longitude: 104.071523, height: 500.0 });
+        // 无人机实时位置（飞行时由后端按步骤更新，前端轮询展示）
+        const dronePosition = reactive({ latitude: 0, longitude: 0, height: 0, mode_code: 0, in_dock: true, activated: false, rc_lost_action: 2 });
+        // 高德地图：Key 存 localStorage，有效时显示地图，无效时回退手动输入
+        const amapKey = ref(localStorage.getItem('amapKey') || '');
+        const amapSecurityCode = ref(localStorage.getItem('amapSecurityCode') || '');
+        const mapMode = ref('manual'); // 'map' 或 'manual'
+        const amapKeyApplied = ref(false); // 高德 Key 是否已验证通过
+        const showAmapConfigDialog = ref(false); // 高德地图配置弹窗
+        const selectingAirport = ref(false); // 机场位置选点模式
+        const addressSearch = ref(''); // 地址搜索输入
+        let amapInstance = null;
+        let amapAutoComplete = null;
+        let airportMarker = null;
+        let airportInfoWindow = null;
+        let droneMarker = null;
+        let droneTrail = [];
+        let dronePolyline = null;
+        const logs = ref([]);
+        // 上拉懒加载历史消息：historyLogs 独立于 logs（轮询只更新 logs，历史不会被覆盖）
+        const historyLogs = ref([]);
+        const loadingHistory = ref(false);
+        const hasMoreHistory = ref(true);
+        const connecting = ref(false);
+        const powered = ref(false);
+        const mqttError = ref(false);
+        const deviceInfo = ref({});
+        const showRegisterDialog = ref(false);
+        // DJI License 是否已锁定：首次注册成功后 localStorage 中存在 locked_app_license
+        // 锁定后注册界面隐藏 License 输入行（license 由第三方平台下发，用户再次输入不起作用）
+        const licenseLocked = ref(!!localStorage.getItem('locked_app_license'));
+        const showDeviceInfoDialog = ref(false);
+        const showDiagnosticDialog = ref(false);
+        const diagnosticLogs = ref([]);
+        const diagnosticFilter = ref('all');
+
+        // 覆盖率报告
+        const showCoverageDialog = ref(false);
+        const showLiveConfigDialog = ref(false);
+        const liveConfigEdit = ref({ realPushEnabled: false, ffmpegPath: 'ffmpeg', videoDir: '', mediaDir: '' });
+        const mediaDirValue = ref('');  // 当前 mediaDir（从 /api/live/capability 顶层获取，非 capability 内）
+        const liveConfigSaveResult = ref(null);  // 保存后的验证结果反馈
+        const installingFfmpeg = ref(false);  // FFmpeg 一键安装中状态
+        const installProgress = ref([]);      // winget 实时输出行
+        const installElapsed = ref(0);        // 已等待秒数
+        let installTimer = null;              // 计时器引用
+        let ffmpegEventSource = null;         // FFmpeg 安装 EventSource 引用（组件级，确保 onUnmounted 可关闭）
+        const coverageHosts = ref([]);
+        const coverageSelectedHost = ref('');
+        const coverageData = ref(null);
+
+        // 平台连接配置
+        const connConfig = reactive({
+            device_mode: 'DOCK',  // DOCK（机场上云） / PILOT（飞行器上云）
+            organization_id: '',
+            device_binding_code: '',
+            app_license: '',
+            dock_type: '',
+            drone_type: '',
+            controller_type: '',  // Pilot 模式遥控器类型
+            selected_payload: '',  // Pilot 模式相机选择（M350/M300 通用云台）
+            mqtt_address: '',
+            mqtt_username: '',
+            mqtt_password: '',
+        });
+
+        // 机场类型选项
+        const dockTypeOptions = [
+            { value: 'DOCK1', label: 'Dock1' },
+            { value: 'DOCK2', label: 'Dock2' },
+            { value: 'DOCK3', label: 'Dock3' },
+        ];
+        // 机场 → 兼容飞行器 映射（与后端 DockModel/DroneModel 兼容性一致）
+        const droneTypeOptionsMap = {
+            DOCK1: [{ value: 'M30',  label: 'M30'  }, { value: 'M30T', label: 'M30T' }],
+            DOCK2: [{ value: 'M3D',  label: 'M3D'  }, { value: 'M3TD', label: 'M3TD' }],
+            DOCK3: [{ value: 'M4D',  label: 'M4D'  }, { value: 'M4TD', label: 'M4TD' }],
+        };
+        // 当前机场类型下的飞行器选项（联动）
+        const droneTypeOptions = computed(() => droneTypeOptionsMap[connConfig.dock_type] || []);
+
+        // 机场类型切换时，若当前飞行器不兼容则自动切换到该机场的首个兼容飞行器
+        function onDockTypeChange() {
+            const compatible = droneTypeOptionsMap[connConfig.dock_type] || [];
+            if (!compatible.some(o => o.value === connConfig.drone_type)) {
+                connConfig.drone_type = compatible.length ? compatible[0].value : '';
+            }
+        }
+
+        // Pilot 模式遥控器类型选项
+        const controllerTypeOptions = [
+            { value: 'RC_PLUS',   label: 'DJI RC Plus'      },
+            { value: 'RC_PLUS_2', label: 'DJI RC Plus 2'    },
+            { value: 'RC_PRO',    label: 'RC Pro 行业版'     },
+            { value: 'SMART_CONTROLLER_ENTERPRISE', label: 'DJI 带屏遥控器行业版' },
+        ];
+        // 遥控器 → 兼容飞行器 映射（基于 DJI 产品支持文档，后端不校验搭配，仅前端联动选项）
+        const pilotDroneTypeOptionsMap = {
+            RC_PLUS:   [{ value: 'M350_RTK', label: 'M350 RTK' }, { value: 'M300_RTK', label: 'M300 RTK' }, { value: 'M30',  label: 'M30'  }, { value: 'M30T', label: 'M30T' }],
+            RC_PLUS_2: [{ value: 'M400',     label: 'Matrice 400' }, { value: 'M4E',      label: 'DJI M4E'   }, { value: 'M4T',      label: 'DJI M4T'   }],
+            RC_PRO:    [{ value: 'MAVIC_3E', label: 'Mavic 3E'  }, { value: 'MAVIC_3T', label: 'Mavic 3T' }],
+            SMART_CONTROLLER_ENTERPRISE: [{ value: 'M300_RTK', label: 'M300 RTK' }],
+        };
+        // 当前遥控器类型下的飞行器选项（联动）
+        const pilotDroneTypeOptions = computed(() => pilotDroneTypeOptionsMap[connConfig.controller_type] || []);
+
+        // Pilot 模式飞行器 → 可选负载 映射（M350/M300 可挂载通用云台）
+        const payloadOptionsMap = {
+            M350_RTK: [
+                { value: 'H20',  label: 'H20'  },
+                { value: 'H20T', label: 'H20T' },
+                { value: 'H20N', label: 'H20N' },
+                { value: 'H30',  label: 'H30'  },
+                { value: 'H30T', label: 'H30T' },
+            ],
+            M300_RTK: [
+                { value: 'H20',  label: 'H20'  },
+                { value: 'H20T', label: 'H20T' },
+                { value: 'H20N', label: 'H20N' },
+                { value: 'H30',  label: 'H30'  },
+                { value: 'H30T', label: 'H30T' },
+            ],
+            M400: [
+                { value: 'H30',  label: 'H30'  },
+                { value: 'H30T', label: 'H30T' },
+            ],
+        };
+        // 当前飞行器类型下的可选负载（M350/M300/M400 可挂载通用云台）
+        const payloadOptions = computed(() => payloadOptionsMap[connConfig.drone_type] || []);
+
+        // 飞行器类型切换时，清空负载选择（新机型可能不需要通用云台）
+        function onDroneTypeChange() {
+            connConfig.selected_payload = '';
+        }
+
+        // 遥控器类型切换时，若当前飞行器不兼容则自动切换到该遥控器的首个兼容飞行器
+        function onControllerTypeChange() {
+            const compatible = pilotDroneTypeOptionsMap[connConfig.controller_type] || [];
+            if (!compatible.some(o => o.value === connConfig.drone_type)) {
+                connConfig.drone_type = compatible.length ? compatible[0].value : '';
+            }
+            connConfig.selected_payload = '';  // 切换遥控器时清空负载选择
+        }
+
+        // 接入模式切换时，初始化对应模式的默认设备类型
+        function onDeviceModeChange() {
+            if (connConfig.device_mode === 'PILOT') {
+                if (!connConfig.controller_type) connConfig.controller_type = 'RC_PLUS';
+                onControllerTypeChange();
+            } else {
+                if (!connConfig.dock_type) connConfig.dock_type = 'DOCK3';
+                onDockTypeChange();
+            }
+            updateDocumentTitle();
+        }
+
+        // 浏览器标签页标题随模式切换（与标题栏保持一致）
+        function updateDocumentTitle() {
+            document.title = connConfig.device_mode === 'PILOT' ? 'DJI Pilot 飞行器模拟器' : 'DJI Dock 机场模拟器';
+        }
+
+        // 指令通讯窗口
+        const logFilter = ref('all');
+        const autoScroll = ref(true);
+        const logContainer = ref(null);
+
+        // MQTT 消息详情抽屉
+        const showMsgDrawer = ref(false);
+        const currentMessage = ref(null);
+
+        // Topic 过滤（选中的不显示）—— 按 topic 最后一段匹配
+        const topicOptions = [
+            'osd', 'state',
+            'services', 'services_reply',
+            'events', 'events_reply',
+            'requests', 'requests_reply',
+            'status', 'status_reply',
+            'property set', 'property set_reply',
+        ];
+        const topicFilter = ref([]);
+
+        let pollTimer = null;
+
+        // 错误码 → 文案映射表（P/S/M 诊断码 + DJI 码）
+        const errorCodeMap = {
+            '210229': '组织ID与绑定码错误',
+            '210230': '填写信息有误，或服务器错误',
+            '210231': '设备已绑定其他组织',
+            '210232': '设备未注册',
+            '210233': '设备已被拒绝，请联系管理员',
+            '210234': '组织不存在',
+            '210235': '项目不存在',
+            'P-1': '上线失败：未收到平台应答',
+            'S-1': 'MQTT 未连接，无法执行上线流程',
+            'S-3': '上线流程异常',
+            'P-2': '无法链接到第三方平台',
+            'P-3': '第三方平台凭证有误',
+            'P-4': 'DJI License 校验失败，请检查 License 配置',
+        };
+
+        // 格式化注册失败提示：code 在 errorCodeMap 中返回映射文案，否则附带 code 便于定位
+        // step 标识失败步骤（后端 OnlineResult.step），附加到提示前让用户精准定位失败环节（TC-REG-019）
+        function formatRegisterError(code, step) {
+            const msg = errorCodeMap[code] || ('注册失败（错误码: ' + code + '）');
+            return step ? step + '失败：' + msg : msg;
+        }
+
+        // localStorage 持久化
+        function saveConnConfig() {
+            try { localStorage.setItem('simulator_connConfig', JSON.stringify(connConfig)); } catch (e) {}
+        }
+        function loadConnConfig() {
+            try {
+                const saved = localStorage.getItem('simulator_connConfig');
+                if (saved) Object.assign(connConfig, JSON.parse(saved));
+            } catch (e) {}
+            updateDocumentTitle();
+        }
+
+        async function fetchJSON(url, options) {
+            try {
+                const resp = await fetch(url, options);
+                return await resp.json();
+            } catch (e) {
+                console.error('请求失败:', url, e);
+                return null;
+            }
+        }
+
+        async function refreshConnection() {
+            const data = await fetchJSON('/api/connection');
+            if (data) {
+                mqttConnected.value = data.mqtt_connected;
+                online.value = data.online;
+                // 后端在线或 MQTT 已连接时推断为开机状态
+                if (data.online || data.mqtt_connected) powered.value = true;
+            }
+        }
+
+        async function refreshState() {
+            const data = await fetchJSON('/api/state');
+            if (data) {
+                state.value = data;
+                editState.batteryPercent = data.batteryPercent;
+                editState.dockTemperature = data.dockTemperature;
+                editState.dockHumidity = data.dockHumidity;
+                editState.windSpeed = data.windSpeed;
+                editState.coverOpen = data.coverOpen;
+                editState.droneInDock = data.droneInDock;
+                editState.droneActivated = data.droneActivated ?? false;
+                editState.silentMode = data.silentMode ?? 0;
+                editState.controllerCapacity = data.controllerCapacity ?? 100;
+            }
+        }
+
+        async function refreshTask() { task.value = await fetchJSON('/api/task') || {}; }
+        async function refreshStreams() { streams.value = await fetchJSON('/api/streams') || []; }
+        async function refreshMedia() { media.value = await fetchJSON('/api/media') || {}; }
+        async function refreshDeviceInfo() { deviceInfo.value = await fetchJSON('/api/device-info') || {}; }
+
+        // 直播推流能力状态（限制清单 + 重新检测）
+        async function loadLiveCapability() {
+            const data = await fetchJSON('/api/live/capability');
+            liveCapability.value = data?.capability || null;
+            mediaDirValue.value = data?.mediaDir || '';
+        }
+        async function refreshLiveCapability() {
+            const data = await fetchJSON('/api/live/capability/refresh', { method: 'POST' });
+            liveCapability.value = data?.capability || null;
+        }
+
+        // 直播推流配置（运行时热加载）
+        function openLiveConfigDialog() {
+            if (liveCapability.value) {
+                liveConfigEdit.value = {
+                    realPushEnabled: liveCapability.value.realPushEnabled,
+                    ffmpegPath: liveCapability.value.ffmpegPath || 'ffmpeg',
+                    videoDir: liveCapability.value.videoDir || '',
+                    mediaDir: mediaDirValue.value || ''
+                };
+            }
+            liveConfigSaveResult.value = null;
+            showLiveConfigDialog.value = true;
+        }
+        async function saveLiveConfig() {
+            const data = await fetchJSON('/api/live/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(liveConfigEdit.value)
+            });
+            const cap = data?.capability || null;
+            liveCapability.value = cap;
+            // 在弹窗内显示验证结果（不关闭弹窗，让用户看到反馈）
+            if (cap) {
+                if (cap.ffmpegStatus === 'OK') {
+                    liveConfigSaveResult.value = { type: 'success', message: 'FFmpeg 验证通过，支持 RTMP + WHIP 推流' };
+                } else if (cap.ffmpegStatus === 'OK_RTMP_ONLY') {
+                    liveConfigSaveResult.value = { type: 'success', message: 'FFmpeg 验证通过，支持 RTMP 推流（WHIP 不支持，需特殊编译版）' };
+                } else if (cap.ffmpegStatus === 'NOT_CHECKED') {
+                    liveConfigSaveResult.value = { type: 'info', message: '真实推流未启用，未执行 FFmpeg 检测' };
+                } else {
+                    liveConfigSaveResult.value = { type: 'error', message: cap.ffmpegError || 'FFmpeg 验证未通过' };
+                }
+            }
+        }
+
+        // 一键安装 FFmpeg（通过 winget，SSE 实时推送进度）
+        function installFfmpeg() {
+            installingFfmpeg.value = true;
+            installProgress.value = [];
+            installElapsed.value = 0;
+            liveConfigSaveResult.value = null;
+
+            // 启动计时器
+            installTimer = setInterval(() => { installElapsed.value++; }, 1000);
+
+            ffmpegEventSource = new EventSource('/api/live/install-ffmpeg-stream');
+
+            ffmpegEventSource.addEventListener('progress', (e) => {
+                installProgress.value.push(e.data);
+                // 限制保留行数，避免内存膨胀
+                if (installProgress.value.length > 200) {
+                    installProgress.value = installProgress.value.slice(-100);
+                }
+                // 自动滚动到底部
+                nextTick(() => {
+                    const panel = document.querySelector('.install-progress-panel');
+                    if (panel) panel.scrollTop = panel.scrollHeight;
+                });
+            });
+
+            ffmpegEventSource.addEventListener('done', (e) => {
+                ffmpegEventSource.close();
+                ffmpegEventSource = null;
+                clearInterval(installTimer);
+                installTimer = null;
+                installingFfmpeg.value = false;
+                try {
+                    const data = JSON.parse(e.data);
+                    if (data?.success) {
+                        const cap = data.capability;
+                        if (cap) {
+                            liveCapability.value = cap;
+                            liveConfigEdit.value.ffmpegPath = cap.ffmpegPath || liveConfigEdit.value.ffmpegPath;
+                            liveConfigEdit.value.realPushEnabled = true;
+                        }
+                        liveConfigSaveResult.value = { type: 'success', message: data.message || 'FFmpeg 安装成功' };
+                        // 安装成功后自动保存完整配置（含 videoDir），避免用户忘记点击"保存并检测"导致 videoDir 丢失
+                        fetchJSON('/api/live/config', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(liveConfigEdit.value)
+                        }).then(saveResp => {
+                            if (saveResp?.capability) {
+                                liveCapability.value = saveResp.capability;
+                            }
+                        });
+                    } else {
+                        liveConfigSaveResult.value = { type: 'error', message: (data?.error || '安装失败') + (data?.suggestion ? '。' + data.suggestion : '') };
+                    }
+                } catch (err) {
+                    liveConfigSaveResult.value = { type: 'error', message: '解析安装结果失败: ' + (err.message || err) };
+                }
+            });
+
+            ffmpegEventSource.addEventListener('error', () => {
+                // EventSource error 在连接异常断开时触发（done 事件已处理则 readyState=CLOSED）
+                if (ffmpegEventSource && ffmpegEventSource.readyState === EventSource.CLOSED) return;
+                if (ffmpegEventSource) {
+                    ffmpegEventSource.close();
+                    ffmpegEventSource = null;
+                }
+                clearInterval(installTimer);
+                installTimer = null;
+                installingFfmpeg.value = false;
+                liveConfigSaveResult.value = { type: 'error', message: '安装连接异常，请重试' };
+            });
+        }
+
+        // 设备型号名称映射（按 model key 中的 type 字段）
+        function dockModelName(modelKey) {
+            const names = { 1: 'Dock', 2: 'Dock2', 3: 'Dock3' };
+            const type = parseInt((modelKey || '').split('-')[1]) || 0;
+            return names[type] || ('Dock-' + type);
+        }
+        function droneModelName(modelKey) {
+            // 按 type-subType 映射，参考 DJI 产品支持文档
+            // https://developer.dji.com/doc/cloud-api-tutorial/cn/overview/product-support.html
+            const names = {
+                '60-0': 'M300 RTK',
+                '67-0': 'M30', '67-1': 'M30T',
+                '77-0': 'M3E', '77-1': 'M3T', '77-3': 'M3TA',
+                '89-0': 'M350 RTK',
+                '91-0': 'M3D', '91-1': 'M3TD',
+                '99-0': 'M4E', '99-1': 'M4T',
+                '100-0': 'M4D', '100-1': 'M4TD',
+                '103-0': 'Matrice 400'
+            };
+            const parts = (modelKey || '').split('-');
+            const key = parts.length >= 3 ? (parts[1] + '-' + parts[2]) : '';
+            return names[key] || ('Drone-' + (parts[1] || '0'));
+        }
+        function controllerModelName(modelKey) {
+            // 按 type 字段映射，参考 DJI 产品支持文档
+            // https://developer.dji.com/doc/cloud-api-tutorial/cn/overview/product-support.html
+            const names = {
+                119: 'DJI RC Plus',
+                144: 'DJI RC Pro 行业版',
+                174: 'DJI RC Plus 2'
+            };
+            const type = parseInt((modelKey || '').split('-')[1]) || 0;
+            return names[type] || ('RC-' + type);
+        }
+
+        async function refreshLogs() {
+            const data = await fetchJSON('/api/logs') || [];
+            // 防御：限制 logs 数组最大长度，避免后端配置变更或异常导致前端渲染过多 DOM
+            logs.value = data.length > 500 ? data.slice(-500) : data;
+            // 内存日志为空时重置历史（断开重连场景）
+            if (logs.value.length === 0) {
+                historyLogs.value = [];
+                hasMoreHistory.value = true;
+            }
+            if (autoScroll.value) {
+                await nextTick();
+                scrollToBottom();
+            }
+        }
+
+        async function refreshConfig() {
+            const data = await fetchJSON('/api/config');
+            if (data) {
+                if (data.device_mode) connConfig.device_mode = data.device_mode;
+                if (!connConfig.organization_id) connConfig.organization_id = data.organization_id || '';
+                if (!connConfig.device_binding_code) connConfig.device_binding_code = data.device_binding_code || '';
+                if (!connConfig.app_license) connConfig.app_license = data.app_license || '';
+                if (!connConfig.dock_type) connConfig.dock_type = data.dock_type || '';
+                if (!connConfig.drone_type) connConfig.drone_type = data.drone_type || '';
+                if (!connConfig.controller_type) connConfig.controller_type = data.controller_type || '';
+                if (!connConfig.mqtt_address) connConfig.mqtt_address = (data.mqtt_host || '') + ':' + (data.mqtt_port || 1883);
+                if (!connConfig.mqtt_username) connConfig.mqtt_username = data.mqtt_username || '';
+                updateDocumentTitle();
+            }
+        }
+
+        function scrollToBottom() {
+            const el = logContainer.value;
+            if (el) el.scrollTop = el.scrollHeight;
+        }
+
+        // 点击 MQTT 消息行，打开右侧详情抽屉
+        function openMessageDetail(i) {
+            const log = filteredLogs.value[i];
+            if (!log) return;
+            // 用 _index 记录在 filteredLogs 中的位置，供高亮当前行使用
+            currentMessage.value = { ...log, _index: i };
+            showMsgDrawer.value = true;
+        }
+
+        // 格式化 payload 为带语法高亮的 HTML
+        const formattedPayload = computed(() => {
+            const log = currentMessage.value;
+            if (!log || !log.payload) return '';
+            try {
+                const obj = JSON.parse(log.payload);
+                return highlightJson(JSON.stringify(obj, null, 2));
+            } catch (e) {
+                // 非合法 JSON（如被截断、或非 JSON 文本），转义后原样显示
+                return escapeHtml(log.payload);
+            }
+        });
+
+        // payload 是否为非合法 JSON（用于显示提示）
+        const payloadTruncated = computed(() => {
+            const log = currentMessage.value;
+            if (!log || !log.payload) return false;
+            try {
+                JSON.parse(log.payload);
+                return false;
+            } catch (e) {
+                return true;
+            }
+        });
+
+        // JSON 语法高亮（key / string / number / boolean / null 着不同颜色）
+        function highlightJson(json) {
+            return escapeHtml(json).replace(
+                /("(?:\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(?:true|false)\b|\bnull\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+                (match) => {
+                    let cls = 'json-number';
+                    if (/^"/.test(match)) {
+                        cls = /:\s*$/.test(match) ? 'json-key' : 'json-string';
+                    } else if (/^(true|false)$/.test(match)) {
+                        cls = 'json-boolean';
+                    } else if (match === 'null') {
+                        cls = 'json-null';
+                    }
+                    return '<span class="' + cls + '">' + match + '</span>';
+                }
+            );
+        }
+
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+
+        async function copyPayload() {
+            const log = currentMessage.value;
+            if (!log || !log.payload) return;
+            // 复制格式化后的 JSON（与代码框显示内容一致），非合法 JSON 则复制原始文本
+            let text = log.payload;
+            try {
+                text = JSON.stringify(JSON.parse(log.payload), null, 2);
+            } catch (e) { /* 非合法 JSON，保持原始文本 */ }
+
+            // 优先使用 Clipboard API，不可用时降级到 execCommand('copy')
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                try {
+                    await navigator.clipboard.writeText(text);
+                    ElementPlus.ElMessage.success('已复制完整 JSON 到剪贴板');
+                    return;
+                } catch (e) { /* 文档未聚焦或权限不足，降级到 execCommand */ }
+            }
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            try {
+                document.execCommand('copy');
+                ElementPlus.ElMessage.success('已复制完整 JSON 到剪贴板');
+            } catch (e2) {
+                ElementPlus.ElMessage.error('复制失败：' + e2.message);
+            }
+            document.body.removeChild(ta);
+        }
+
+        // 核心注册逻辑（silent=true 时不弹窗不显示成功消息，用于开机时自动重连）
+        async function registerToPlatform(silent) {
+            connecting.value = true;
+            mqttError.value = false;
+            // 等待 Vue 完成 DOM 更新（按钮 loading 状态渲染），避免点击后 UI 卡顿无反馈
+            await nextTick();
+            let host = connConfig.mqtt_address;
+            let port = 1883;
+            const addr = String(connConfig.mqtt_address || '').trim();
+            const idx = addr.lastIndexOf(':');
+            if (idx > 0) {
+                host = addr.substring(0, idx).trim();
+                const p = parseInt(addr.substring(idx + 1).trim(), 10);
+                if (!isNaN(p)) port = p;
+            } else if (addr) {
+                host = addr;
+            }
+            // License 处理：已锁定时使用锁定的 license（界面已隐藏输入行），
+            // 未锁定时为首次注册，使用用户输入的值
+            // 模拟真实机场 license 首次注册后不可更改的行为
+            // 注意：license 锁定延迟到注册成功后执行（见下方 onlineData.success 分支），
+            // 避免注册失败也锁定错误值——桌面应用无法清除 localStorage，输入错误会彻底卡死（TC-REG-007）
+            let licenseToUse = connConfig.app_license;
+            if (!silent) {
+                const lockedLicense = localStorage.getItem('locked_app_license');
+                if (lockedLicense) {
+                    licenseToUse = lockedLicense;
+                }
+            }
+            // 用户主动注册到第三方平台时，清空旧平台的通讯指令日志，避免不同平台指令混淆
+            // 自动重连（silent=true）是同一平台重连，不清空
+            if (!silent) {
+                await fetchJSON('/api/logs', { method: 'DELETE' });
+                showMsgDrawer.value = false;
+                currentMessage.value = null;
+                logs.value = [];
+            }
+            const body = {
+                device_mode: connConfig.device_mode,
+                organization_id: connConfig.organization_id,
+                device_binding_code: connConfig.device_binding_code,
+                app_license: licenseToUse,
+                dock_type: connConfig.dock_type,
+                drone_type: connConfig.drone_type,
+                controller_type: connConfig.controller_type,
+                selected_payload: connConfig.selected_payload,
+                mqtt_host: host,
+                mqtt_port: port,
+                mqtt_username: connConfig.mqtt_username,
+            };
+            if (connConfig.mqtt_password) body.mqtt_password = connConfig.mqtt_password;
+            // 注意：不在此处保存配置，注册成功后才保存（避免错误密码覆盖原密码）
+
+            const data = await fetchJSON('/api/connect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (data) {
+                mqttConnected.value = data.mqtt_connected;
+                if (data.success) {
+                    // MQTT 连接成功，继续注册+上线流程
+                    // 注意：MQTT 连接成功 ≠ 注册成功，必须等 /api/online 返回成功才算注册成功
+                    // 开机自动重连（silent=true）时跳过注册流程，直接上线（update_topo）
+                    const onlineData = await fetchJSON('/api/online', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ skip_register: silent })
+                    });
+                    connecting.value = false;
+                    if (onlineData) {
+                        online.value = onlineData.online;
+                        if (onlineData.success) {
+                            // 注册成功后才锁定 license（模拟真实机场首次注册后不可更改）
+                            // 延迟到此处而非输入即锁定：避免注册失败时锁定错误值，
+                            // 桌面端无法清除 localStorage 会导致用户彻底卡死（TC-REG-007）
+                            if (!silent && licenseToUse) {
+                                localStorage.setItem('locked_app_license', licenseToUse);
+                                licenseLocked.value = true;
+                            }
+                            // 注册+上线成功，保存配置（含密码），便于下次自动填充
+                            saveConnConfig();
+                            mqttError.value = false;
+                            localStorage.setItem('registered', 'true');
+                            if (!silent) {
+                                ElementPlus.ElMessage.success('已注册: ' + data.broker);
+                                showRegisterDialog.value = false;
+                            }
+                            return true;
+                        } else {
+                            // 注册失败（config 超时、绑定码错误、license 不匹配等）
+                            // 断开 MQTT 连接（注册失败不应保持连接；保留诊断日志供用户查看失败详情，TC-REG-024）
+                            const disconnectData = await fetch('/api/disconnect', { method: 'POST' }).then(r => r.json());
+                            mqttConnected.value = disconnectData.mqtt_connected;
+                            localStorage.setItem('registered', 'false');
+                            mqttError.value = true;
+                            ElementPlus.ElMessage.error(formatRegisterError(onlineData.code, onlineData.step));
+                            return false;
+                        }
+                    }
+                    return false;
+                } else {
+                    // MQTT 连接失败（地址不可达或凭证错误）
+                    connecting.value = false;
+                    localStorage.setItem('registered', 'false');
+                    mqttError.value = true;
+                    ElementPlus.ElMessage.error(formatRegisterError(data.code));
+                    return false;
+                }
+            }
+            connecting.value = false;
+            return false;
+        }
+
+        // 诊断日志
+        async function loadDiagnosticLogs() {
+            try {
+                const resp = await fetch('/api/diagnostic/logs');
+                const data = await resp.json();
+                if (data.success) {
+                    diagnosticLogs.value = data.logs || [];
+                }
+            } catch (e) {
+                console.error('加载诊断日志失败:', e);
+            }
+        }
+
+        const filteredDiagnosticLogs = computed(() => {
+            if (diagnosticFilter.value === 'all') return diagnosticLogs.value;
+            return diagnosticLogs.value.filter(function(l) { return l.category === diagnosticFilter.value; });
+        });
+
+        // 覆盖率报告
+        const coverageRateText = computed(() => {
+            if (!coverageData.value || !coverageData.value.total_count) return '0.0%';
+            return (coverageData.value.covered_count * 100.0 / coverageData.value.total_count).toFixed(1) + '%';
+        });
+
+        async function openCoverageDialog() {
+            showCoverageDialog.value = true;
+            await loadCoverageHosts();
+        }
+
+        async function loadCoverageHosts() {
+            try {
+                const resp = await fetch('/api/coverage/hosts');
+                const data = await resp.json();
+                if (data.success) {
+                    coverageHosts.value = data.hosts || [];
+                    // 默认选中当前 MQTT 地址
+                    if (data.current_host && !coverageSelectedHost.value) {
+                        coverageSelectedHost.value = data.current_host;
+                    }
+                    if (coverageSelectedHost.value) {
+                        await loadCoverageData();
+                    } else {
+                        coverageData.value = null;
+                    }
+                }
+            } catch (e) {
+                console.error('加载覆盖率地址列表失败:', e);
+            }
+        }
+
+        async function loadCoverageData() {
+            if (!coverageSelectedHost.value) {
+                coverageData.value = null;
+                return;
+            }
+            try {
+                const resp = await fetch('/api/coverage/data?host=' + encodeURIComponent(coverageSelectedHost.value));
+                coverageData.value = await resp.json();
+            } catch (e) {
+                console.error('加载覆盖率数据失败:', e);
+            }
+        }
+
+        function downloadCoverageReport() {
+            if (!coverageSelectedHost.value) return;
+            const url = '/api/coverage/report?host=' + encodeURIComponent(coverageSelectedHost.value);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'coverage-' + coverageSelectedHost.value.replace(/[:.]/g, '_') + '.html';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        // 注册按钮：弹窗确认
+        async function doRegister() {
+            await registerToPlatform(false);
+        }
+
+        // 开机：如果上次注册成功，自动用保存的配置连接 MQTT + 注册 + 上线
+        async function doPowerOn() {
+            if (powered.value) return;
+            // 显式重置状态（避免上次关机失败残留错误状态）
+            mqttConnected.value = false;
+            online.value = false;
+            mqttError.value = false;
+            powered.value = true;
+
+            // 检查上次是否注册成功
+            const lastRegistered = localStorage.getItem('registered') === 'true';
+            if (!lastRegistered) return;  // 未注册过，等待用户手动注册
+
+            // 用保存的配置自动注册 + 上线
+            await registerToPlatform(true);
+        }
+
+        // 关机：下线 + 断开 MQTT + 清空日志（后端 offline 已清空诊断日志与 MQTT 消息日志，前端配合清空历史状态）
+        async function doPowerOff() {
+            if (!powered.value) return;
+            await fetchJSON('/api/offline', { method: 'POST' });
+            // 无论后端是否成功，前端都重置为关机状态（避免 offline 失败时状态不一致）
+            online.value = false;
+            mqttConnected.value = false;
+            powered.value = false;
+            mqttError.value = false;
+            connecting.value = false;
+            // 清空指令通讯窗口与历史分页状态（避免下次开机翻页加载跨会话消息）
+            logs.value = [];
+            historyLogs.value = [];
+            hasMoreHistory.value = true;
+        }
+
+        async function saveState() {
+            await fetchJSON('/api/state', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(editState)
+            });
+        }
+
+        // 机场位置：加载/保存（持久化到后端配置文件）
+        async function loadLocation() {
+            const data = await fetchJSON('/api/location');
+            if (data) {
+                locationEdit.latitude = data.latitude;
+                locationEdit.longitude = data.longitude;
+                locationEdit.height = data.height;
+            }
+        }
+        async function saveLocation() {
+            const data = await fetchJSON('/api/location', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(locationEdit)
+            });
+            if (data) {
+                if (data.success) {
+                    ElementPlus.ElMessage.success('机场位置已保存');
+                    locationEdit.latitude = data.latitude;
+                    locationEdit.longitude = data.longitude;
+                    locationEdit.height = data.height;
+                    updateAirportMarker();
+                } else {
+                    ElementPlus.ElMessage.error(data.message || '机场位置保存失败');
+                }
+            }
+        }
+
+        // 高德地图：保存 Key 并初始化
+        function saveAmapKey() {
+            const key = amapKey.value.trim();
+            const code = amapSecurityCode.value.trim();
+            if (!key) {
+                ElementPlus.ElMessage.warning('请输入高德 JS API Key');
+                return;
+            }
+            localStorage.setItem('amapKey', key);
+            if (code) {
+                localStorage.setItem('amapSecurityCode', code);
+            } else {
+                localStorage.removeItem('amapSecurityCode');
+            }
+            showAmapConfigDialog.value = false;
+            initAmap(key, code);
+        }
+
+        // 高德地图：清除 Key 并回退手动模式
+        function clearAmapKey() {
+            localStorage.removeItem('amapKey');
+            localStorage.removeItem('amapSecurityCode');
+            amapKey.value = '';
+            amapSecurityCode.value = '';
+            amapKeyApplied.value = false;
+            mapMode.value = 'manual';
+            if (amapInstance) {
+                amapInstance.destroy();
+            }
+            amapInstance = null;
+            amapAutoComplete = null;
+            airportMarker = null;
+            airportInfoWindow = null;
+            droneMarker = null;
+            dronePolyline = null;
+            droneTrail = [];
+            showAmapConfigDialog.value = false;
+            ElementPlus.ElMessage.info('已清除高德 Key，切换到手动输入模式');
+        }
+
+        // 模式切换处理
+        function onMapModeChange(mode) {
+            if (mode === 'map' && amapKeyApplied.value && !amapInstance) {
+                // 切换到地图模式但地图未初始化
+                initAmap(amapKey.value.trim(), amapSecurityCode.value.trim());
+            }
+        }
+
+        // 动态加载高德 JS API
+        function initAmap(key, securityCode) {
+            // 高德 JS API 2.0 安全密钥配置
+            if (securityCode) {
+                window._AMapSecurityConfig = { securityJsCode: securityCode };
+            }
+            if (window.AMap) {
+                createMap();
+                return;
+            }
+            const script = document.createElement('script');
+            script.src = `https://webapi.amap.com/maps?v=2.0&key=${key}&plugin=AMap.AutoComplete`;
+            script.onload = () => createMap();
+            script.onerror = () => {
+                amapKeyApplied.value = false;
+                mapMode.value = 'manual';
+                ElementPlus.ElMessage.error('高德 JS API 加载失败，请检查 Key 或网络');
+            };
+            document.head.appendChild(script);
+        }
+
+        // 创建地图实例 + Marker + 轨迹线
+        function createMap() {
+            // 先切换模式让 mapContainer div 渲染，再在 nextTick 中创建地图
+            mapMode.value = 'map';
+            nextTick(() => {
+                try {
+                    amapInstance = new AMap.Map('mapContainer', {
+                        zoom: 16,
+                        center: [locationEdit.longitude, locationEdit.latitude]
+                    });
+                    // 机场 Marker（可拖拽选点）
+                    airportMarker = new AMap.Marker({
+                        position: [locationEdit.longitude, locationEdit.latitude],
+                        draggable: true,
+                        title: '机场位置'
+                    });
+                    airportMarker.on('dragging', (e) => {
+                        locationEdit.longitude = e.lnglat.getLng();
+                        locationEdit.latitude = e.lnglat.getLat();
+                    });
+                    airportMarker.on('dragend', (e) => {
+                        setAirportLocation(e.lnglat.getLng(), e.lnglat.getLat());
+                    });
+                    // 鼠标悬停显示经纬度和高度
+                    airportInfoWindow = new AMap.InfoWindow({
+                        offset: new AMap.Pixel(0, -30),
+                        closeWhenClickMap: false
+                    });
+                    airportMarker.on('mouseover', () => {
+                        updateAirportInfoWindow();
+                        airportInfoWindow.open(amapInstance, airportMarker.getPosition());
+                    });
+                    airportMarker.on('mouseout', () => {
+                        airportInfoWindow.close();
+                    });
+                    amapInstance.add(airportMarker);
+                    // 无人机 Marker（初始隐藏，激活后显示）
+                    droneMarker = new AMap.Marker({
+                        position: [locationEdit.longitude, locationEdit.latitude],
+                        title: '无人机'
+                    });
+                    amapInstance.add(droneMarker);
+                    droneMarker.hide();
+                    // 轨迹线
+                    droneTrail = [];
+                    dronePolyline = new AMap.Polyline({
+                        path: [],
+                        strokeColor: '#FF0000',
+                        strokeWeight: 3,
+                        strokeOpacity: 0.8
+                    });
+                    amapInstance.add(dronePolyline);
+                    // 创建复用的 AutoComplete 实例（供 el-autocomplete 的 fetch-suggestions 回调使用）
+                    amapAutoComplete = new AMap.AutoComplete({ city: '全国' });
+                    amapKeyApplied.value = true;
+                    ElementPlus.ElMessage.success('高德地图已加载');
+                } catch(e) {
+                    console.error('高德地图初始化失败:', e);
+                    amapKeyApplied.value = false;
+                    mapMode.value = 'manual';
+                    ElementPlus.ElMessage.error('高德地图初始化失败，请检查 Key 是否正确');
+                }
+            });
+        }
+
+        // 设置机场位置：更新坐标、Marker，获取高程后自动保存（地图选点/拖动 Marker 共用）
+        async function setAirportLocation(lng, lat) {
+            locationEdit.longitude = lng;
+            locationEdit.latitude = lat;
+            if (airportMarker) {
+                airportMarker.setPosition([lng, lat]);
+            }
+            await fetchElevation(lat, lng);
+            await saveLocation();
+        }
+
+        // el-autocomplete 获取地址建议列表（调用 AMap.AutoComplete.search）
+        function fetchAddressSuggestions(queryString, callback) {
+            if (!queryString || !queryString.trim() || !amapAutoComplete) {
+                callback([]);
+                return;
+            }
+            amapAutoComplete.search(queryString.trim(), (status, result) => {
+                if (status === 'complete' && result && result.tips) {
+                    const suggestions = result.tips
+                        .filter(tip => tip.location)
+                        .map(tip => ({ value: tip.name, location: tip.location }));
+                    callback(suggestions);
+                } else {
+                    callback([]);
+                }
+            });
+        }
+
+        // el-autocomplete 选中地址建议：仅移动地图中心到目标位置，不修改机场坐标
+        function onAddressSelect(item) {
+            if (item && item.location && amapInstance) {
+                amapInstance.setZoomAndCenter(16, [item.location.lng, item.location.lat]);
+            }
+        }
+
+        // 保存机场位置后更新地图 Marker
+        function updateAirportMarker() {
+            if (mapMode.value !== 'map' || !airportMarker) return;
+            airportMarker.setPosition([locationEdit.longitude, locationEdit.latitude]);
+            amapInstance.setCenter([locationEdit.longitude, locationEdit.latitude]);
+        }
+
+        // 更新机场 InfoWindow 内容（经纬度+高度）
+        function updateAirportInfoWindow() {
+            if (!airportInfoWindow) return;
+            const content = `<div style="padding:4px 8px; font-size:12px; white-space:nowrap;">
+                <div>纬度: ${locationEdit.latitude.toFixed(6)}</div>
+                <div>经度: ${locationEdit.longitude.toFixed(6)}</div>
+                <div>高度: ${locationEdit.height.toFixed(1)}m</div>
+            </div>`;
+            airportInfoWindow.setContent(content);
+        }
+
+        // 进入机场位置选点模式
+        function startSelectAirport() {
+            if (mapMode.value !== 'map' || !amapInstance || selectingAirport.value) return;
+            selectingAirport.value = true;
+            amapInstance.setDefaultCursor('crosshair');
+            airportMarker.setDraggable(false);
+            amapInstance.on('click', onMapClickSelectAirport);
+        }
+
+        // 取消选点模式
+        function cancelSelectAirport() {
+            selectingAirport.value = false;
+            if (amapInstance) {
+                amapInstance.setDefaultCursor('');
+                amapInstance.off('click', onMapClickSelectAirport);
+            }
+            if (airportMarker) {
+                airportMarker.setDraggable(true);
+            }
+        }
+
+        // 地图点击选点回调
+        function onMapClickSelectAirport(e) {
+            const lng = e.lnglat.getLng();
+            const lat = e.lnglat.getLat();
+            setAirportLocation(lng, lat);
+            cancelSelectAirport();
+            ElementPlus.ElMessage.success('已选择机场位置，正在查询海拔...');
+        }
+
+        // 查询海拔高度（Open-Meteo Elevation API，免费无需 Key）
+        async function fetchElevation(lat, lng) {
+            try {
+                const resp = await fetch(`https://api.open-meteo.com/v1/elevation?latitude=${lat}&longitude=${lng}`);
+                const data = await resp.json();
+                if (data.elevation !== undefined && data.elevation !== null) {
+                    locationEdit.height = Math.round(data.elevation * 10) / 10;
+                    ElementPlus.ElMessage.success(`已获取海拔高度 ${locationEdit.height}m`);
+                } else {
+                    ElementPlus.ElMessage.warning('海拔查询无数据，请手动输入高度');
+                }
+            } catch(e) {
+                console.error('海拔查询失败:', e);
+                ElementPlus.ElMessage.warning('海拔查询失败，请手动输入高度');
+            }
+        }
+
+        // 无人机位置变化时更新地图 Marker + 轨迹
+        function updateDroneMarker() {
+            if (mapMode.value !== 'map' || !droneMarker) return;
+            if (!dronePosition.activated) {
+                droneMarker.hide();
+                return;
+            }
+            droneMarker.show();
+            const pos = [dronePosition.longitude, dronePosition.latitude];
+            droneMarker.setPosition(pos);
+            // 记录轨迹（位置变化时才添加）
+            const last = droneTrail[droneTrail.length - 1];
+            if (!last || last[0] !== pos[0] || last[1] !== pos[1]) {
+                droneTrail.push(pos);
+                dronePolyline.setPath(droneTrail);
+            }
+        }
+
+        // 无人机实时位置（轮询展示）
+        async function refreshDronePosition() {
+            const data = await fetchJSON('/api/drone/position');
+            if (data) {
+                dronePosition.latitude = data.latitude;
+                dronePosition.longitude = data.longitude;
+                dronePosition.height = data.height;
+                dronePosition.mode_code = data.mode_code;
+                dronePosition.in_dock = data.in_dock;
+                dronePosition.activated = data.activated;
+                dronePosition.rc_lost_action = data.rc_lost_action;
+                updateDroneMarker();
+            }
+        }
+        // 无人机状态标签：在舱未激活=休眠，不在舱未激活=未知，激活后按 mode_code 映射
+        const droneStatusLabel = computed(() => {
+            if (!dronePosition.activated) return dronePosition.in_dock ? '休眠' : '未知';
+            const labels = { 0: '待机', 1: '起飞准备', 2: '起飞准备完毕', 4: '自动起飞',
+                              5: '航线飞行', 9: '自动返航', 10: '自动降落', 13: '返航降落' };
+            return labels[dronePosition.mode_code] || '未知';
+        });
+        // rc_lost_action 选择器
+        async function saveRcLostAction() {
+            const res = await fetchJSON('/api/drone/rc-lost-action', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ rc_lost_action: dronePosition.rc_lost_action })
+            });
+            if (res && res.success === false) {
+                ElMessage.error(res.message || '设置 rc_lost_action 失败');
+            }
+        }
+        // 模拟失联按钮可用条件：MQTT 已连接 + 无人机已激活且在飞行中（不在舱内）
+        const canTriggerRcLost = computed(() =>
+            mqttConnected.value && dronePosition.activated && !dronePosition.in_dock
+        );
+        async function triggerRcLost() {
+            const res = await fetchJSON('/api/flight/trigger-rc-lost', { method: 'POST' });
+            if (res && res.success === false) {
+                ElMessage.error(res.message || '触发失联失败');
+            }
+        }
+
+        async function clearLogs() {
+            await fetchJSON('/api/logs', { method: 'DELETE' });
+            showMsgDrawer.value = false;
+            currentMessage.value = null;
+            // 清空内存日志的同时重置历史
+            historyLogs.value = [];
+            hasMoreHistory.value = true;
+            await refreshLogs();
+        }
+
+        // 上拉加载历史消息：从本地日志文件按 ts 分页查询
+        async function loadMoreHistory() {
+            if (loadingHistory.value || !hasMoreHistory.value) return;
+            const allLogs = [...historyLogs.value, ...logs.value];
+            if (allLogs.length === 0) { hasMoreHistory.value = false; return; }
+            // beforeTime 取当前显示中最早一条的 ts
+            const beforeTime = allLogs[0].ts;
+            if (!beforeTime) { hasMoreHistory.value = false; return; }
+
+            loadingHistory.value = true;
+            const el = logContainer.value;
+            const prevScrollHeight = el ? el.scrollHeight : 0;
+            const prevScrollTop = el ? el.scrollTop : 0;
+            try {
+                const data = await fetchJSON(`/api/logs?beforeTime=${beforeTime}&limit=500`) || [];
+                if (data.length === 0) {
+                    hasMoreHistory.value = false;
+                } else {
+                    // 去重：过滤掉 ts >= beforeTime 的（避免时间戳精度导致重叠）
+                    const filtered = data.filter(l => !l.ts || l.ts < beforeTime);
+                    if (filtered.length === 0) {
+                        hasMoreHistory.value = false;
+                    } else {
+                        historyLogs.value = [...filtered, ...historyLogs.value];
+                        if (filtered.length < 500) hasMoreHistory.value = false;
+                    }
+                }
+            } finally {
+                loadingHistory.value = false;
+                // 恢复滚动位置：历史消息插入到顶部后，保持视觉位置不变
+                await nextTick();
+                if (el) {
+                    el.scrollTop = prevScrollTop + (el.scrollHeight - prevScrollHeight);
+                }
+            }
+        }
+
+        // 日志区滚动事件：接近顶部时触发上拉加载
+        function onLogScroll() {
+            const el = logContainer.value;
+            if (!el) return;
+            if (el.scrollTop < 50 && !loadingHistory.value && hasMoreHistory.value) {
+                loadMoreHistory();
+            }
+        }
+
+        // 下载本地日志文件（JSON Lines 格式，当天）
+        function downloadLogFile() {
+            window.open('/api/logs/download', '_blank');
+        }
+
+        const filteredLogs = computed(() => {
+            // 拼接历史消息（上拉加载）+ 当前内存消息（轮询更新）
+            const all = [...historyLogs.value, ...logs.value];
+            return all.filter(l => {
+                if (logFilter.value !== 'all' && l.direction !== logFilter.value) return false;
+                if (topicFilter.value.length > 0) {
+                    const topic = String(l.topic || '');
+                    // 将 'property set' 转为 'property/set' 进行后缀匹配
+                    if (topicFilter.value.some(f => topic.endsWith('/' + f.replace(' ', '/')))) return false;
+                }
+                return true;
+            });
+        });
+
+        async function pollAll() {
+            // Dock 专属轮询（loadPsdkState/loadEsdkState）已迁移到 dock-panel.js 的 onMounted
+            await Promise.all([refreshConnection(), refreshState(), refreshTask(), refreshStreams(), refreshMedia(), refreshLogs(), refreshDronePosition()]);
+        }
+
+        onMounted(() => {
+            loadConnConfig();
+            refreshConfig();
+            refreshDeviceInfo();
+            loadLiveCapability();
+            loadLocation();
+            pollAll();
+            pollTimer = setInterval(pollAll, 2000);
+            // 高德地图：localStorage 有 Key 则自动加载
+            const savedKey = localStorage.getItem('amapKey');
+            const savedCode = localStorage.getItem('amapSecurityCode') || '';
+            if (savedKey) {
+                amapKey.value = savedKey;
+                amapSecurityCode.value = savedCode;
+                initAmap(savedKey, savedCode);
+            }
+        });
+
+        onUnmounted(() => {
+            if (pollTimer) clearInterval(pollTimer);
+            // 防御：组件卸载时清理 FFmpeg 安装相关的资源，避免定时器和 EventSource 泄漏
+            if (installTimer) {
+                clearInterval(installTimer);
+                installTimer = null;
+            }
+            if (ffmpegEventSource) {
+                ffmpegEventSource.close();
+                ffmpegEventSource = null;
+            }
+        });
+
+        // 共享上下文：供 dock-panel / pilot-panel 子组件 inject 使用
+        // 传递 ref/reactive 对象引用，子组件 inject 后响应性保持
+        provide('ctx', {
+            // 共享状态
+            mqttConnected, online, state, editState, task, streams, liveCapability, media, logs,
+            connConfig, connecting, powered, mqttError, deviceInfo, licenseLocked,
+            locationEdit, dronePosition,
+            // 日志相关
+            logFilter, autoScroll, logContainer, topicFilter, topicOptions, filteredLogs,
+            showMsgDrawer, currentMessage, formattedPayload, payloadTruncated,
+            // 弹窗开关
+            showRegisterDialog, showDeviceInfoDialog, showDiagnosticDialog, showCoverageDialog,
+            showLiveConfigDialog, showAmapConfigDialog,
+            // 直播配置
+            liveConfigEdit, mediaDirValue, liveConfigSaveResult, installingFfmpeg, installProgress, installElapsed,
+            // 诊断/覆盖率
+            diagnosticLogs, diagnosticFilter, filteredDiagnosticLogs,
+            coverageHosts, coverageSelectedHost, coverageData,
+            // 地图
+            amapKey, amapSecurityCode, mapMode, amapKeyApplied, selectingAirport, addressSearch,
+            // 共享方法
+            fetchJSON, refreshState, refreshLogs, refreshTask, refreshStreams, refreshMedia, refreshDeviceInfo, refreshConnection,
+            saveConnConfig, loadConnConfig, refreshConfig,
+            registerToPlatform, doRegister, doPowerOn, doPowerOff, saveState, clearLogs, downloadLogFile,
+            loadLiveCapability, refreshLiveCapability, openLiveConfigDialog, saveLiveConfig, installFfmpeg,
+            saveLocation, loadLocation, saveRcLostAction, triggerRcLost,
+            saveAmapKey, clearAmapKey, onMapModeChange, initAmap, createMap, setAirportLocation,
+            fetchAddressSuggestions, onAddressSelect, updateAirportMarker, updateAirportInfoWindow,
+            startSelectAirport, cancelSelectAirport, onMapClickSelectAirport, fetchElevation, updateDroneMarker, refreshDronePosition,
+            loadDiagnosticLogs, openCoverageDialog, loadCoverageHosts, loadCoverageData, downloadCoverageReport,
+            openMessageDetail, copyPayload,
+            // 工具函数和选项
+            dockModelName, droneModelName, controllerModelName,
+            dockTypeOptions, droneTypeOptions, controllerTypeOptions, pilotDroneTypeOptions, payloadOptions,
+            onDockTypeChange, onControllerTypeChange, onDeviceModeChange, onDroneTypeChange,
+            droneStatusLabel, canTriggerRcLost, coverageRateText,
+        });
+
+        // 外壳模板（标题栏/日志区/公共弹窗）需要的共享项；Dock 专属项已迁移到 dock-panel.js
+        return { mqttConnected, online, powered, mqttError, state, editState, task, streams, media, logs,
+                 connConfig, connecting, deviceInfo, showRegisterDialog, licenseLocked, showDeviceInfoDialog,
+                 logFilter, autoScroll, logContainer, topicFilter, topicOptions,
+                 filteredLogs, historyLogs, loadingHistory, hasMoreHistory,
+                 showMsgDrawer, currentMessage, formattedPayload, payloadTruncated,
+                 openMessageDetail, copyPayload,
+                 doRegister, doPowerOn, doPowerOff, saveState, clearLogs, downloadLogFile,
+                 loadMoreHistory, onLogScroll,
+                 dockModelName, droneModelName, controllerModelName,
+                 dockTypeOptions, droneTypeOptions, onDockTypeChange,
+                 controllerTypeOptions, pilotDroneTypeOptions, payloadOptions, onControllerTypeChange, onDeviceModeChange, onDroneTypeChange,
+                 showDiagnosticDialog, diagnosticLogs, diagnosticFilter, filteredDiagnosticLogs, loadDiagnosticLogs,
+                 showCoverageDialog, coverageHosts, coverageSelectedHost, coverageData, coverageRateText,
+                 openCoverageDialog, loadCoverageHosts, loadCoverageData, downloadCoverageReport,
+                 liveCapability, loadLiveCapability, refreshLiveCapability,
+                 showLiveConfigDialog, liveConfigEdit, liveConfigSaveResult, installingFfmpeg,
+                 installProgress, installElapsed,
+                 openLiveConfigDialog, saveLiveConfig, installFfmpeg,
+                 locationEdit, dronePosition, droneStatusLabel, canTriggerRcLost, triggerRcLost, saveRcLostAction, saveLocation,
+                 amapKey, amapSecurityCode, mapMode, amapKeyApplied,
+                 showAmapConfigDialog, saveAmapKey, clearAmapKey, onMapModeChange,
+                 selectingAirport, startSelectAirport, cancelSelectAirport,
+                 addressSearch, fetchAddressSuggestions, onAddressSelect };
+    }
+});
+app.use(ElementPlus);
+// 注册 Dock/Pilot 面板组件（CDN 方式，无构建链）
+registerDockPanel(app);
+registerPilotPanel(app);
+registerPilotStatusPanel(app);
+registerPilotLivePanel(app);
+registerPilotCloudPanel(app);
+registerPilotConfigPanel(app);
+registerPilotJsbridgeTabsPanel(app);
+app.mount('#app');
+// Vue 挂载完成，移除加载占位
+document.getElementById('app-loading')?.remove();
+</script>
+</body>
+</html>

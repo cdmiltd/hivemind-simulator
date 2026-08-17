@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Maven
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2
+          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
+
+      - name: Build with Maven
+        run: mvn package -DskipTests -B
+
+      - name: Detect modules and create runtime
+        shell: bash
+        run: |
+          JAR=$(ls target/*.jar | grep -v original | head -1)
+          echo "JAR: $JAR"
+          # 动态获取所有 java.* 模块 + 关键 jdk.* 模块，避免遗漏运行时反射加载的模块
+          # 已多次因手动指定模块列表遗漏导致 JRE 启动失败：
+          #   - java.beans.PropertyEditorSupport（java.desktop）
+          #   - java.util.logging.Logger（java.logging）
+          #   - org.ietf.jgss.GSSException（java.security.jgss）
+          # jlink 不支持 ALL-DEFAULT 常量，需动态获取模块名
+          JAVA_MODULES=$(java --list-modules | grep "^java\." | cut -d'@' -f1 | paste -sd,)
+          JDK_MODULES="jdk.crypto.cryptoki,jdk.crypto.ec,jdk.unsupported,jdk.zipfs"
+          MODULES="${JAVA_MODULES},${JDK_MODULES}"
+          echo "Modules: $MODULES"
+          jlink --no-header-files --no-man-pages --compress=2 --strip-debug --add-modules "$MODULES" --output target/runtime
+
+      - name: Verify runtime
+        shell: bash
+        run: |
+          JAR=$(ls target/*.jar | grep -v original | head -1)
+          target/runtime/bin/java -jar "$JAR" &
+          PID=$!
+          sleep 8
+          if kill -0 $PID 2>/dev/null; then
+            echo "Runtime verification passed"
+            kill $PID
+          else
+            echo "Runtime verification failed"
+            exit 1
+          fi
+
+      - name: Wait for release-please to create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # release-please 在合并 release PR 后创建 tag 和 GitHub Release
+          # release.yml 由 tag 触发，可能与 release-please 创建 Release 并发
+          # 等待 Release 存在，避免 tauri-action 创建空 Release 覆盖 release-please 的 CHANGELOG
+          TAG="${GITHUB_REF#refs/tags/}"
+          echo "等待 GitHub Release $TAG 创建..."
+          for i in $(seq 1 30); do
+            if gh release view "$TAG" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+              echo "Release $TAG 已存在"
+              exit 0
+            fi
+            echo "等待中... ($i/30)"
+            sleep 10
+          done
+          echo "[警告] Release $TAG 未在 300 秒内出现，tauri-action 将创建新 Release"
+          # 不报错，让 tauri-action 创建 Release 作为兜底
+
+      - name: Build Tauri
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: '${{ github.ref_name }}'
+          releaseDraft: false
+          args: --target x86_64-pc-windows-msvc
