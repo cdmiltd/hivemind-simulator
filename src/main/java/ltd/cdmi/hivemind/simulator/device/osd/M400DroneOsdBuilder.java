@@ -1,0 +1,96 @@
+// Copyright (C) 2026 CDMI
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU Affero General Public License as
+// published by the Free Software Foundation, either version 3 of the
+// License, or (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+// GNU Affero General Public License for more details.
+//
+// You should have received a copy of the GNU Affero General Public License
+// along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+package ltd.cdmi.hivemind.simulator.device.osd;
+
+import ltd.cdmi.dji.cloudapi.sdk.model.DroneModel;
+import ltd.cdmi.dji.cloudapi.sdk.telemetry.OsdField;
+import ltd.cdmi.dji.cloudapi.sdk.model.PayloadType;
+import ltd.cdmi.hivemind.simulator.device.DefaultCameraResolver;
+import org.springframework.stereotype.Component;
+
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/**
+ * M400/M4E/M4T 飞行器 OSD 字段集构造器（Pilot 模式）。
+ * <p>支持 Matrice 400、DJI Matrice 4E、DJI Matrice 4T 三款 Pilot 上云飞行器。
+ * 三者设备属性列表字段集完全一致，共用此 Builder。</p>
+ * <p>各机型默认相机（DJI 产品支持文档）：
+ * <ul>
+ *   <li>M400 → H30（82-0-0，非热成像）</li>
+ *   <li>M4E → DJI Matrice 4E Camera（88-0-0）</li>
+ *   <li>M4T → DJI Matrice 4T Camera（89-0-0）</li>
+ * </ul>
+ * <p>与 M4D 差异：
+ * <ul>
+ *   <li>type_subtype_gimbalindex 简化：仅 gimbal_pitch/roll/yaw + payload_index + zoom_factor（无 measure_target_*、thermal_*）</li>
+ *   <li>无 cameras 数组</li>
+ *   <li>无 distance_limit_status/rth_altitude（属性列表未列，覆盖 includeDistanceLimitFields 为 false）</li>
+ *   <li>mode_code/gear/firmware_version 始终上报（pushMode=0 基础飞行字段，M400 属性列表第二部分确认）</li>
+ * </ul>
+ * <p>参考：DJI Cloud API Pilot to Cloud 设备属性文档（用户提供的 M400/M4E/M4T 属性列表核实）</p>
+ */
+@Component
+public class M400DroneOsdBuilder extends AbstractDroneOsdBuilder {
+
+    @Override
+    public String aircraftFamily() {
+        return "m400-m4e-m4t";
+    }
+
+    @Override
+    public boolean supports(DroneModel droneType) {
+        return droneType == DroneModel.M400
+                || droneType == DroneModel.M4E
+                || droneType == DroneModel.M4T;
+    }
+
+    @Override
+    protected boolean includeDistanceLimitFields() {
+        // M400 Pilot 属性列表未列 distance_limit_status/rth_altitude
+        return false;
+    }
+
+    @Override
+    protected boolean includeFirmwareVersionInOsd() {
+        // M400 Pilot 属性列表 firmware_version pushMode=0（OSD），其他机型 pushMode=1（state topic）
+        return true;
+    }
+
+    @Override
+    protected void appendDroneSpecific(OsdContext ctx, Map<String, Object> data) {
+        data.put(OsdField.TYPE_SUBTYPE_GIMBALINDEX.fieldName(), buildGimbalInfo(ctx));
+    }
+
+    /**
+     * 构造 type_subtype_gimbalindex 结构（云台姿态）。
+     * <p>M400/M4E/M4T 结构简化（对比 M4D）：仅 gimbal_pitch/roll/yaw + payload_index + zoom_factor，
+     * 无 measure_target_*（激光测距）、无 thermal_*（红外测温）。</p>
+     * <p>payload_index 按机型动态获取（DJI 产品支持文档）：
+     * M400→82-0-0(H30), M4E→88-0-0(M4E Camera), M4T→89-0-0(M4T Camera)。</p>
+     * <p>核实依据：M400/M4E/M4T Pilot 设备属性列表 type_subtype_gimbalindex 结构（pushMode=0, r）。</p>
+     */
+    private Map<String, Object> buildGimbalInfo(OsdContext ctx) {
+        PayloadType camera = DefaultCameraResolver.defaultCameraFor(ctx.getDroneType());
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("gimbal_pitch", 0.0);
+        m.put("gimbal_roll", 0.0);
+        m.put("gimbal_yaw", 0.0);
+        m.put("payload_index", camera != null ? camera.cameraIndex() : "82-0-0");
+        m.put("zoom_factor", 2.0);
+        return m;
+    }
+}
