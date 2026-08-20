@@ -1,0 +1,47 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DJI Cloud API Simulator",
+  "version": "1.3.2",
+  "identifier": "com.cdmi.dock-simulator",
+  "build": {},
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "DJI Dock 机场模拟器",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1024,
+        "minHeight": 700,
+        "resizable": true,
+        "center": true,
+        "visible": false,
+        "url": "http://127.0.0.1:19090"
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "icon": [
+      "icons/icon.ico"
+    ],
+    "resources": {
+      "../target/dji-dock-simulator-1.3.0.jar": "app.jar",
+      "../target/runtime/": "runtime/"
+    },
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "installMode": "perMachine",
+        "installerHooks": "nsis-hooks.nsh"
+      },
+      "webviewInstallMode": {
+        "type": "downloadBootstrapper"
+      }
+    }
+  }
+}

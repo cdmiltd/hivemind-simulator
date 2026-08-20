@@ -1,0 +1,33 @@
+name: Release Please
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      release-type:
+        description: '强制创建 release PR（snapshot 之外的常规用法）'
+        required: false
+        default: 'auto'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: .github/release-please-config.json
+          manifest-file: .github/release-please-manifest.json
+          # release-please 负责：
+          #   1. 根据 conventional commits 自动计算下一个版本号
+          #   2. 创建/更新 release PR（包含 pom.xml/Cargo.toml/tauri.conf.json 版本号递增 + CHANGELOG.md）
+          #   3. 合并 release PR 后自动创建 tag 和 GitHub Release（含 CHANGELOG 内容）
+          # tag 创建后自动触发：
+          #   - codeup release 流水线（镜像推送 + Gitee 发行版）
+          #   - release.yml（构建桌面应用并上传到已有的 GitHub Release）

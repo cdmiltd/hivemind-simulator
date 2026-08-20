@@ -1,0 +1,143 @@
+# ========================================
+# DJI Dock 模拟器 Docker Compose 部署
+# ========================================
+# 包含服务:
+#   - simulator: DJI Dock 模拟器(默认启动)
+#   - emqx: 本地调试用 MQTT Broker(可选,--profile local-mqtt 启用)
+#
+# 两种部署场景:
+#   A. 对接第三方平台(常用):平台自带 MQTT Broker,无需本地 EMQX
+#      1. 构建镜像:docker compose build simulator
+#      2. 启动:docker compose up -d
+#      3. 访问模拟器:http://localhost:9090,注册弹窗中填平台的 MQTT 地址
+#   B. 本地调试(无平台环境):带本地 EMQX,可订阅 sim-* topic 观察上报数据
+#      1. 启动:docker compose --profile local-mqtt up -d
+#      2. EMQX Dashboard:http://localhost:18083(admin/public)
+#      注意:纯 Broker 无平台后端,注册流程的 RPC 无人应答,仅适合观察
+#      模拟器发布的 OSD/State 事件数据流
+#
+# 常用命令:
+#   停止:docker compose down(带 --profile local-mqtt 才会停掉 emqx)
+#   仅停止模拟器:docker compose stop simulator
+#   查看日志:docker compose logs -f simulator
+#
+# Named Volumes(由 Docker 管理,独立于容器生命周期,容器重建数据不丢失):
+#   - dji-dock-simulator-config: 运行时持久化配置(直播/媒体/机场位置)
+#   - dji-dock-simulator-media:  媒体上传使用的模拟照片/视频文件
+#   - dji-dock-simulator-videos: 直播推流使用的视频文件
+#   - emqx-data / emqx-log: EMQX 数据与日志
+#
+# 查看卷:docker volume ls | grep dji-dock-simulator
+# 查看卷内容:docker volume inspect dji-dock-simulator-config
+# 手动拷贝文件到卷:
+#   docker cp ./photo.jpg $(docker compose ps -q simulator):/app/media/
+#   docker cp ./video.mp4 $(docker compose ps -q simulator):/app/videos/
+# ========================================
+
+services:
+  # 本地调试用 MQTT Broker(可选):对接第三方平台时无需启用(profile 未激活时
+  # docker compose up -d 不会启动本服务)。模拟器仅是 MQTT 客户端,Broker 属平台侧设施
+  emqx:
+    profiles: ["local-mqtt"]
+    image: emqx/emqx:5.6
+    container_name: emqx
+    ports:
+      - "1883:1883"     # MQTT
+      - "8083:8083"     # WebSocket
+      - "8883:8883"     # MQTTS
+      - "18083:18083"   # Dashboard
+    environment:
+      EMQX_NAME: emqx
+      EMQX_HOST: 127.0.0.1
+      EMQX_DASHBOARD__DEFAULT_USERNAME: admin
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: public
+      # EMQX 默认允许匿名连接,生产环境应在 Dashboard 配置认证
+      # 配置路径:Dashboard → Access Control → Authentication
+    volumes:
+      - emqx-data:/opt/emqx/data
+      - emqx-log:/opt/emqx/log
+    networks:
+      - simulator-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  simulator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dji-dock-simulator
+    ports:
+      - "9090:9090"
+    environment:
+      # MQTT 连接默认值(仅 --profile local-mqtt 场景指向容器内 emqx 生效;
+      # 对接第三方平台时:改为平台 MQTT 地址(如 MQTT_HOST: mqtt.xxx.com),或在注册弹窗中直接填写,
+      # 前端填写的地址会持久化到 config 卷,优先级高于此处默认值)
+      MQTT_HOST: emqx
+      MQTT_PORT: 1883
+      # MQTT 凭据(本地 EMQX 默认允许匿名,留空即可;对接平台时填平台凭据)
+      MQTT_USERNAME: ""
+      MQTT_PASSWORD: ""
+      # Web 端口
+      SERVER_PORT: 9090
+      # 日志级别(DEBUG=详细启动日志 / INFO=默认 / WARN=精简)
+      LOGGING_LEVEL_LTD_CDMI_HIVEMIND_SIMULATOR: DEBUG
+      # 运行时持久化配置目录(与 Dockerfile ENV SIMULATOR_CONFIG_DIR 一致)
+      # LiveConfigStore 读取此环境变量,写入的 live-config.json 保存在 simulator-config volume
+      SIMULATOR_CONFIG_DIR: /app/config
+    # 注意:不再 depends_on emqx——模拟器启动无 MQTT 依赖(连接仅在用户点击注册后建立,
+    # 且 emqx 为可选 profile 服务,强制依赖会导致 profile 失效,EMQX 总被拉起)
+    # localhost 自动映射:容器内 localhost 指容器自身,MqttClientManager 检测到容器环境时
+    # 自动将 localhost/127.0.0.1 映射为 host.docker.internal;本条配置保证 Linux 宿主机
+    # 也可解析该域名(Docker Desktop 原生支持,无需此配置)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - simulator-net
+      # 对接同机 Docker 部署的第三方平台:接入平台容器网络直连其 MQTT
+      # (经宿主机 IP+端口映射的"发夹回环"路径会被 Docker Desktop 断开,TCP 可握手但数据不通)
+      # 平台网络名用 docker network ls 查看;更换部署环境且无该网络时,注释本条与底部声明
+      - platform-net
+    # 三个 Named Volumes 独立挂载,Docker 管理,容器重建不丢失
+    # 目录所有权:镜像构建时 chown 1000:1000,首次挂载 Docker volume 会继承此权限
+    volumes:
+      - simulator-config:/app/config   # 持久化配置(直播/媒体/机场位置)
+      - simulator-media:/app/media     # 媒体上传:模拟照片/视频文件
+      - simulator-videos:/app/videos   # 直播推流:ffmpeg 读取的视频文件
+    restart: unless-stopped
+    # 健康检查继承自 Dockerfile 的 HEALTHCHECK 指令(curl /api/health)
+    # docker compose ps 可查看 health 状态:healthy / starting / unhealthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+volumes:
+  # EMQX 数据与日志卷
+  emqx-data:
+  emqx-log:
+  # 模拟器数据卷(3 个独立卷,与项目名 dji-dock-simulator 一致,方便单独备份/迁移)
+  simulator-config:
+    name: dji-dock-simulator-config
+  simulator-media:
+    name: dji-dock-simulator-media
+  simulator-videos:
+    name: dji-dock-simulator-videos
+
+networks:
+  simulator-net:
+    driver: bridge
+  # 同机 Docker 部署的第三方平台容器网络(external:不由本 compose 创建,须已存在)
+  # 使模拟器可直连平台容器(如 uas-emqx:1883);更换部署环境时同步调整或注释
+  platform-net:
+    external: true
+    name: uas-network
