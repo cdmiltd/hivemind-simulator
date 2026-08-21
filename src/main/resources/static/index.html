@@ -1816,14 +1816,6 @@ const app = createApp({
             // 通知后端记录电源状态（单一真相源，刷新页面后据此恢复开机状态，TC-MQTT-008）
             fetchJSON('/api/power/on', { method: 'POST' });
 
-            // 检查上次是否注册成功
-            const lastRegistered = localStorage.getItem('registered') === 'true';
-            if (!lastRegistered) {
-                // 未注册过：直接弹出注册弹窗选择设备并注册（开机 = 选择设备 + 接入平台，TC-MQTT-003）
-                showRegisterDialog.value = true;
-                return;
-            }
-
             // 用保存的配置自动注册 + 上线
             await registerToPlatform(true);
         }
