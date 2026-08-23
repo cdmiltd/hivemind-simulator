@@ -1,0 +1,2111 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DJI Dock 机场监控器</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="stylesheet" href="/vendor/element-plus/index.css">
+    <style>
+        /* ========================================
+         * DJI Dock 机场监控器 - 专业工业控制台配色
+         * 深色标题栏 + 浅色内容区 + 天蓝强调色
+         * ======================================== */
+
+        :root {
+            /* 背景色层 */
+            --bg-base: #f0f2f5;
+            --bg-card: #ffffff;
+            --bg-header: #1e293b;
+            --bg-log-hover: #f1f5f9;
+            --bg-payload: #f8fafc;
+
+            /* 文字色层 */
+            --text-primary: #0f172a;
+            --text-secondary: #475569;
+            --text-muted: #94a3b8;
+            --text-inverse: #f8fafc;
+
+            /* 强调色 */
+            --accent: #0ea5e9;
+            --success: #10b981;
+            --danger: #ef4444;
+            --warning: #f59e0b;
+
+            /* 边框 */
+            --border-light: #e2e8f0;
+
+            /* 阴影 */
+            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.04);
+            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.06), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+            --shadow-header: 0 2px 8px rgba(15, 23, 42, 0.16);
+
+            /* 圆角 */
+            --radius-md: 6px;
+            --radius-lg: 8px;
+
+            /* 字体 */
+            --font-mono: 'JetBrains Mono', 'SF Mono', 'Consolas', 'Cascadia Code', monospace;
+            --font-body: 'Noto Sans SC', -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+
+            /* Element Plus 变量覆盖 */
+            --el-color-primary: #0ea5e9;
+            --el-color-primary-light-3: #38bdf8;
+            --el-color-primary-light-5: #7dd3fc;
+            --el-color-primary-light-7: #bae6fd;
+            --el-color-primary-light-9: #e0f2fe;
+            --el-color-primary-dark-2: #0284c7;
+            --el-color-success: #10b981;
+            --el-color-danger: #ef4444;
+            --el-color-warning: #f59e0b;
+            --el-border-radius-base: 6px;
+            --el-border-color: #e2e8f0;
+            --el-text-color-primary: #0f172a;
+            --el-text-color-regular: #475569;
+        }
+
+        /* 基础重置 */
+        * { box-sizing: border-box; }
+        html, body { height: 100%; margin: 0; padding: 0; }
+        body {
+            background: var(--bg-base);
+            font-family: var(--font-body);
+            overflow: hidden;
+            color: var(--text-primary);
+            font-size: 14px;
+            line-height: 1.6;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }
+        #app { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+
+        /* ===== 标题栏 - 深色专业控制台 ===== */
+        .app-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            height: 56px;
+            background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+            flex-shrink: 0;
+            box-shadow: var(--shadow-header);
+            z-index: 10;
+        }
+        .app-header-left { display: flex; align-items: center; gap: 16px; }
+        .app-header h1 {
+            font-size: 15px;
+            font-weight: 700;
+            margin: 0;
+            color: var(--text-inverse);
+            white-space: nowrap;
+            letter-spacing: 0.5px;
+        }
+        .app-header-right { display: flex; align-items: center; gap: 8px; }
+
+        /* 标题栏状态标签 - 半透明背景适配深色 */
+        .app-header .el-tag {
+            border: none;
+            font-weight: 500;
+            font-size: 12px;
+            height: 24px;
+            line-height: 22px;
+        }
+        .app-header .el-tag.el-tag--info.is-plain {
+            background: transparent;
+            border-color: rgba(148, 163, 184, 0.3);
+            color: var(--text-muted);
+        }
+        .app-header .el-tag.el-tag--danger.is-plain {
+            background: transparent;
+            border-color: rgba(239, 68, 68, 0.4);
+            color: #fca5a5;
+        }
+        .mqtt-blink { animation: mqtt-blink 1s ease-in-out infinite; }
+        @keyframes mqtt-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+        .app-header .el-tag--success {
+            background: rgba(16, 185, 129, 0.15);
+            color: #6ee7b7;
+        }
+        .app-header .el-tag--danger {
+            background: rgba(239, 68, 68, 0.15);
+            color: #fca5a5;
+        }
+        .app-header .el-tag--info {
+            background: rgba(148, 163, 184, 0.15);
+            color: #cbd5e1;
+        }
+
+        /* 标题栏按钮适配 */
+        .app-header .el-button { border-radius: var(--radius-md); font-weight: 500; }
+        .app-header .el-button--small { height: 32px; padding: 0 14px; }
+        .app-header .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success) {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.15);
+            color: var(--text-inverse);
+        }
+        .app-header .el-button:not(.el-button--primary):not(.el-button--danger):not(.el-button--success):hover {
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.25);
+            color: var(--text-inverse);
+        }
+
+        /* 标题栏下拉菜单按钮箭头 */
+        .header-dropdown-btn::after {
+            content: '▾';
+            margin-left: 4px;
+            font-size: 10px;
+            opacity: 0.6;
+        }
+
+        /* 标题栏纯CSS下拉菜单 */
+        .header-dropdown { position: relative; }
+        .header-dropdown-menu {
+            display: none;
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 4px;
+            background: #1e293b;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: var(--radius-md);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+            min-width: 130px;
+            padding: 4px 0;
+            z-index: 100;
+        }
+        .header-dropdown:hover .header-dropdown-menu,
+        .header-dropdown:focus-within .header-dropdown-menu {
+            display: block;
+        }
+        .header-dropdown-item {
+            padding: 8px 16px;
+            font-size: 13px;
+            color: rgba(255, 255, 255, 0.85);
+            cursor: pointer;
+            white-space: nowrap;
+            transition: background 0.15s, color 0.15s;
+        }
+        .header-dropdown-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+        }
+        .header-dropdown-item.is-disabled {
+            color: rgba(255, 255, 255, 0.3);
+            cursor: not-allowed;
+        }
+        .header-dropdown-item.is-disabled:hover {
+            background: transparent;
+            color: rgba(255, 255, 255, 0.3);
+        }
+
+        /* 页面跳转链接 */
+        .nav-link {
+            color: rgba(255, 255, 255, 0.6);
+            text-decoration: none;
+            font-size: 12px;
+            padding: 4px 10px;
+            border-radius: var(--radius-md);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .nav-link:hover {
+            color: var(--text-inverse);
+            background: rgba(255, 255, 255, 0.1);
+            border-color: rgba(255, 255, 255, 0.2);
+        }
+
+        /* ===== 主内容区 ===== */
+        .main-content {
+            flex: 1;
+            display: flex;
+            gap: 16px;
+            padding: 16px;
+            overflow: hidden;
+            min-height: 0;
+        }
+        .left-panel { flex: 2; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+        .right-panel {
+            flex: 1;
+            overflow-y: auto;
+            min-width: 340px;
+            min-height: 0;
+            padding-right: 4px;
+        }
+
+        /* 自定义滚动条 */
+        .right-panel::-webkit-scrollbar,
+        .log-container::-webkit-scrollbar { width: 6px; }
+        .right-panel::-webkit-scrollbar-track,
+        .log-container::-webkit-scrollbar-track { background: transparent; }
+        .right-panel::-webkit-scrollbar-thumb,
+        .log-container::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 3px;
+        }
+        .right-panel::-webkit-scrollbar-thumb:hover,
+        .log-container::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
+
+        /* ===== 左侧指令窗口 ===== */
+        .panel-card {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            background: var(--bg-card);
+            border: 1px solid var(--border-light);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            min-height: 0;
+            box-shadow: var(--shadow-sm);
+        }
+        .panel-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--border-light);
+            flex-shrink: 0;
+            flex-wrap: nowrap;
+            overflow: hidden;
+        }
+        .panel-header-title {
+            font-weight: 600;
+            margin-right: 4px;
+            white-space: nowrap;
+            color: var(--text-primary);
+            font-size: 14px;
+        }
+        .panel-header-right {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-shrink: 0;
+        }
+
+        /* 日志行 */
+        .log-container { flex: 1; overflow-y: auto; min-height: 0; }
+        .log-row {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            padding: 6px 12px;
+            border-bottom: 1px solid var(--border-light);
+            cursor: pointer;
+            transition: background 0.15s ease;
+            line-height: 1.5;
+        }
+        .log-row:hover { background: var(--bg-log-hover); }
+        .log-recv { color: var(--warning); font-weight: 700; }
+        .log-send { color: var(--success); font-weight: 700; }
+        .log-time { color: var(--text-muted); margin-right: 8px; font-size: 11px; }
+        .log-method { color: var(--accent); font-weight: 600; margin-right: 8px; }
+        .log-topic { color: var(--text-secondary); word-break: break-all; }
+        .log-payload {
+            margin-top: 6px;
+            padding: 8px 12px;
+            background: var(--bg-payload);
+            border-left: 3px solid var(--accent);
+            border-radius: var(--radius-md);
+            white-space: pre-wrap;
+            word-break: break-all;
+            color: var(--text-secondary);
+            font-size: 11px;
+            line-height: 1.6;
+        }
+
+        /* ===== 右侧面板卡片 ===== */
+        .right-card {
+            margin-bottom: 16px;
+            border: 1px solid var(--border-light) !important;
+            border-radius: var(--radius-lg) !important;
+            box-shadow: var(--shadow-sm);
+            overflow: hidden;
+        }
+        .right-card:last-child { margin-bottom: 0; }
+        .right-card .el-card__header {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border-light);
+            font-weight: 600;
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+        .right-card .el-card__body { padding: 16px; }
+
+        /* Descriptions 数据展示 */
+        .right-card .el-descriptions__label {
+            color: var(--text-secondary);
+            font-weight: 500;
+            width: 110px;
+            white-space: nowrap;
+        }
+        .right-card .el-descriptions__content {
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            font-size: 12px;
+        }
+
+        /* 弹窗优化 */
+        .el-dialog { border-radius: var(--radius-lg); }
+        .el-dialog__header {
+            border-bottom: 1px solid var(--border-light);
+            margin-right: 0;
+            padding: 14px 20px;
+        }
+        .el-dialog__title { font-weight: 600; font-size: 15px; }
+        .el-dialog__body { padding: 18px 20px; }
+        .el-dialog__footer { border-top: 1px solid var(--border-light); padding: 12px 20px; }
+
+        /* 控制面板分区 */
+        .ctrl-section { margin-bottom: 16px; }
+        .ctrl-section:last-child { margin-bottom: 0; }
+        .ctrl-section-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+        }
+        .ctrl-section-header::before {
+            content: '';
+            width: 3px;
+            height: 12px;
+            background: var(--accent);
+            border-radius: 2px;
+            flex-shrink: 0;
+        }
+        .ctrl-section-header::after {
+            content: '';
+            flex: 1;
+            height: 1px;
+            background: var(--border-light);
+        }
+        .ctrl-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+        .ctrl-grid-3 {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 8px;
+        }
+        .ctrl-grid .el-button,
+        .ctrl-grid-3 .el-button {
+            margin: 0;
+            width: 100%;
+            justify-content: center;
+        }
+        .ctrl-full { margin-bottom: 8px; }
+        .ctrl-full:last-child { margin-bottom: 0; }
+        .ctrl-full .el-button { width: 100%; margin: 0; }
+        .ctrl-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        .ctrl-row .el-select { flex: 1; }
+        .ctrl-row .el-button { flex-shrink: 0; }
+
+        /* ===== MQTT 消息详情抽屉 ===== */
+        .msg-drawer-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            width: 100%;
+        }
+        .msg-drawer-title { font-weight: 600; font-size: 15px; }
+        .msg-drawer-body {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            gap: 12px;
+            padding: 0 4px;
+        }
+        .msg-meta { flex-shrink: 0; }
+        .msg-meta .el-descriptions__content {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            word-break: break-all;
+        }
+        .msg-code-wrap {
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .msg-truncated-tip { flex-shrink: 0; }
+        .msg-code {
+            flex: 1;
+            margin: 0;
+            padding: 14px 16px;
+            background: #1e293b;
+            border-radius: var(--radius-md);
+            color: #e2e8f0;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            line-height: 1.6;
+            overflow: auto;
+            white-space: pre;
+            tab-size: 2;
+            /* 确保代码框内文本可手动选择复制（不被 Element Plus 抽屉样式覆盖） */
+            -webkit-user-select: text;
+            user-select: text;
+            cursor: text;
+        }
+        .msg-code::-webkit-scrollbar { width: 8px; height: 8px; }
+        .msg-code::-webkit-scrollbar-track { background: transparent; }
+        .msg-code::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        .msg-code::-webkit-scrollbar-thumb:hover { background: #64748b; }
+
+        /* JSON 语法高亮（Material Theme 配色，适配深色背景） */
+        .json-key { color: #82AAFF; }
+        .json-string { color: #C3E88D; }
+        .json-number { color: #F78C6C; }
+        .json-boolean { color: #C792EA; }
+        .json-null { color: #C792EA; }
+
+        /* 日志行选中高亮 */
+        .log-row.log-row-active {
+            background: #e0f2fe;
+            border-left: 3px solid var(--accent);
+            padding-left: 9px;
+        }
+        /* 诊断报告样式 */
+        .diag-stats {
+            display: flex;
+            gap: 24px;
+            padding: 12px 16px;
+            background: #f8fafc;
+            border-radius: 6px;
+            margin-bottom: 16px;
+        }
+        .diag-stat-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .diag-stat-label {
+            font-size: 12px;
+            color: #64748b;
+            margin-bottom: 4px;
+        }
+        .diag-stat-value {
+            font-size: 20px;
+            font-weight: 600;
+            color: #1e293b;
+        }
+        .diag-stat-value.diag-error {
+            color: #ef4444;
+        }
+        .diag-section-header {
+            font-size: 14px;
+            font-weight: 600;
+            margin: 12px 0 8px;
+            color: #334155;
+        }
+        .diag-error-item {
+            padding: 8px 12px;
+            border-radius: 4px;
+            margin-bottom: 6px;
+            font-size: 13px;
+        }
+        .diag-error-bg {
+            background: #fef2f2;
+            border-left: 3px solid #ef4444;
+        }
+        .diag-warning-bg {
+            background: #fffbeb;
+            border-left: 3px solid #f59e0b;
+        }
+        .diag-error-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-bottom: 4px;
+        }
+        .diag-error-type {
+            font-weight: 600;
+            color: #1e293b;
+        }
+        .diag-error-topic {
+            color: #6366f1;
+            font-family: monospace;
+        }
+        .diag-error-detail {
+            color: #475569;
+            margin-bottom: 2px;
+        }
+        .diag-error-meta {
+            font-size: 12px;
+            color: #94a3b8;
+            font-family: monospace;
+        }
+        .diag-error-code {
+            color: #f87171;
+            font-weight: 600;
+            margin-right: 4px;
+        }
+        .diag-pair-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 12px;
+            font-size: 13px;
+            color: #475569;
+            border-bottom: 1px solid #f1f5f9;
+        }
+        .diag-pair-topic {
+            font-family: monospace;
+            color: #6366f1;
+        }
+        .diag-pair-duration {
+            margin-left: auto;
+            color: #94a3b8;
+            font-size: 12px;
+        }
+        .diag-toggle {
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 4px;
+        }
+        .diag-empty {
+            text-align: center;
+            padding: 24px;
+            color: #94a3b8;
+        }
+
+        /* v-cloak：Vue 挂载前隐藏模板，避免未样式化内容闪烁 */
+        [v-cloak]{display:none}
+        /* 加载占位：CSS/JS 加载期间显示，不依赖外部资源 */
+        .app-loading{position:fixed;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:#f0f2f5;flex-direction:column;gap:16px;z-index:9999}
+        .app-loading-spinner{width:32px;height:32px;border:3px solid #e2e8f0;border-top-color:#0ea5e9;border-radius:50%;animation:spin 0.8s linear infinite}
+        .app-loading-text{color:#475569;font-size:14px;font-family:-apple-system,'Segoe UI','Microsoft YaHei',sans-serif}
+        @keyframes spin{to{transform:rotate(360deg)}}
+    </style>
+</head>
+<body>
+<div id="app-loading" class="app-loading">
+    <div class="app-loading-spinner"></div>
+    <div class="app-loading-text">加载中…</div>
+</div>
+<div id="app" v-cloak>
+    <!-- Title 栏 -->
+    <div class="app-header">
+        <div class="app-header-left">
+            <h1>DJI Dock 机场监控器</h1>
+            <el-tag :type="monitorConnected ? 'success' : (monitorError ? 'danger' : 'info')" size="small" :effect="monitorConnected ? 'light' : 'plain'" :class="{'mqtt-blink': monitorConnecting}">监控: {{ monitorConnected ? '已连接' : (monitorConnecting ? '连接中' : '未连接') }}</el-tag>
+            <el-tag v-if="selectedDevice" type="success" size="small">设备: {{ selectedDevice }}</el-tag>
+        </div>
+        <div class="app-header-right">
+            <el-button :type="monitorConnected ? 'danger' : 'primary'" size="small" @click="monitorConnected ? doMonitorDisconnect() : (showMonitorConnectDialog = true)">{{ monitorConnected ? '断开' : '连接到第三方平台' }}</el-button>
+            <el-button size="small" @click="showDeviceSelectDialog = true" :disabled="!monitorConnected">选择设备</el-button>
+            <div class="header-dropdown">
+                <el-button size="small" class="header-dropdown-btn" :disabled="!selectedDevice">设备控制</el-button>
+                <div class="header-dropdown-menu">
+                    <div class="header-dropdown-item" @click="selectedDevice && (showFlightControlDialog = true)" :class="{ 'is-disabled': !selectedDevice }">飞行控制</div>
+                    <div class="header-dropdown-item" @click="selectedDevice && (showPayloadControlDialog = true)" :class="{ 'is-disabled': !selectedDevice }">负载控制</div>
+                    <div class="header-dropdown-item" @click="selectedDevice && (showDebugDialog = true)" :class="{ 'is-disabled': !selectedDevice }">远程调试</div>
+                </div>
+            </div>
+            <div class="header-dropdown">
+                <el-button size="small" class="header-dropdown-btn">诊断告警</el-button>
+                <div class="header-dropdown-menu">
+                    <div class="header-dropdown-item" @click="logs.length > 0 && runDiagnosis()" :class="{ 'is-disabled': logs.length === 0 }">诊断</div>
+                    <div class="header-dropdown-item" @click="openDiagnosticLogsDialog()">诊断日志</div>
+                    <div class="header-dropdown-item" @click="monitorConnected && openHmsDialog()" :class="{ 'is-disabled': !monitorConnected }">HMS 告警</div>
+                </div>
+            </div>
+            <div class="header-dropdown">
+                <el-button size="small" class="header-dropdown-btn" :disabled="!monitorConnected">任务媒体</el-button>
+                <div class="header-dropdown-menu">
+                    <div class="header-dropdown-item" @click="monitorConnected && openTaskDialog()" :class="{ 'is-disabled': !monitorConnected }">航线任务</div>
+                    <div class="header-dropdown-item" @click="monitorConnected && openLiveDialog()" :class="{ 'is-disabled': !monitorConnected }">直播流</div>
+                </div>
+            </div>
+            <div class="header-dropdown">
+                <el-button size="small" class="header-dropdown-btn">工具</el-button>
+                <div class="header-dropdown-menu">
+                    <div class="header-dropdown-item" @click="(monitorConnected && selectedDevice) && openCmdTemplateDialog()" :class="{ 'is-disabled': !monitorConnected || !selectedDevice }">指令模板</div>
+                    <div class="header-dropdown-item" @click="openCoverageDialog()">覆盖率报告</div>
+                </div>
+            </div>
+            <a href="/" class="nav-link">模拟器</a>
+        </div>
+    </div>
+
+    <!-- 主页面：左右布局 -->
+    <div class="main-content">
+        <!-- 左侧：指令通讯窗口 -->
+        <div class="left-panel">
+            <div class="panel-card">
+                <div class="panel-header">
+                    <span class="panel-header-title">指令通讯窗口</span>
+                    <el-select v-model="topicFilter" multiple collapse-tags collapse-tags-tooltip size="small" placeholder="过滤 Topic（选中不显示）" style="width: 200px;">
+                        <el-option v-for="t in topicOptions" :key="t" :label="t" :value="t"></el-option>
+                    </el-select>
+                    <el-input v-model="searchKeyword" size="small" clearable placeholder="搜索 method/topic/内容" style="width: 200px;"></el-input>
+                    <div class="panel-header-right">
+                        <el-radio-group v-model="logFilter" size="small">
+                            <el-radio-button label="all">全部</el-radio-button>
+                            <el-radio-button label="recv">收</el-radio-button>
+                            <el-radio-button label="send">发</el-radio-button>
+                        </el-radio-group>
+                        <el-switch v-model="autoScroll" active-text="自动滚动" size="small"></el-switch>
+                        <el-button size="small" @click="clearLogs">清空</el-button>
+                    </div>
+                </div>
+                <div class="log-container" ref="logContainer">
+                    <div v-for="(log, i) in filteredLogs" :key="i" class="log-row" :class="{'log-row-active': currentMessage && currentMessage._index === i}" @click="openMessageDetail(i)">
+                        <span class="log-time">{{ log.time }}</span>
+                        <span :class="log.direction === 'recv' ? 'log-recv' : 'log-send'">[{{ log.direction === 'recv' ? '收' : '发' }}]</span>
+                        <span class="log-method">{{ log.method }}</span>
+                        <span class="log-topic">{{ log.topic }}</span>
+                    </div>
+                    <div v-if="filteredLogs.length === 0" style="color: #909399; padding: 24px; text-align: center;">暂无通讯消息</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧：设备信息 + OSD 遥测 -->
+        <div class="right-panel">
+            <!-- 设备信息卡片 -->
+            <el-card class="right-card" header="设备信息">
+                <el-descriptions v-if="selectedDevice" :column="1" border size="small">
+                    <el-descriptions-item label="机场 SN">{{ selectedDevice }}</el-descriptions-item>
+                    <el-descriptions-item label="无人机 SN">{{ currentDevice?.droneSn || '-' }}</el-descriptions-item>
+                    <el-descriptions-item label="机场型号">{{ currentDevice?.gatewayType ? deviceTypeName(currentDevice.gatewayType) + ' (' + currentDevice.gatewayType + ')' : '-' }}</el-descriptions-item>
+                    <el-descriptions-item label="无人机型号">{{ currentDevice?.droneType ? droneTypeName(currentDevice.droneType, currentDevice.droneSubType) + ' (' + currentDevice.droneType + ')' : '-' }}</el-descriptions-item>
+                    <el-descriptions-item label="在线状态">
+                        <el-tag :type="currentDevice?.online ? 'success' : 'info'" size="small">{{ currentDevice?.online ? '在线' : '离线' }}</el-tag>
+                    </el-descriptions-item>
+                </el-descriptions>
+                <div v-else style="text-align: center; color: var(--text-muted); padding: 20px;">未选择设备</div>
+            </el-card>
+
+            <!-- 无人机 OSD 卡片 -->
+            <el-card class="right-card" header="无人机 OSD">
+                <el-descriptions v-if="droneOsdItems.length > 0" :column="1" border size="small">
+                    <el-descriptions-item v-for="item in droneOsdItems" :key="item.label" :label="item.label">{{ item.value }}</el-descriptions-item>
+                </el-descriptions>
+                <div v-else style="text-align: center; color: var(--text-muted); padding: 20px;">暂无无人机遥测数据</div>
+            </el-card>
+
+            <!-- DRC OSD 卡片 -->
+            <el-card class="right-card" header="DRC OSD">
+                <el-descriptions v-if="drcOsdItems.length > 0" :column="1" border size="small">
+                    <el-descriptions-item v-for="item in drcOsdItems" :key="item.label" :label="item.label">{{ item.value }}</el-descriptions-item>
+                </el-descriptions>
+                <div v-else style="text-align: center; color: var(--text-muted); padding: 20px;">暂无 DRC 遥测数据</div>
+            </el-card>
+
+            <!-- 机场 OSD 卡片 -->
+            <el-card class="right-card" header="机场 OSD">
+                <el-descriptions v-if="dockOsdItems.length > 0" :column="1" border size="small">
+                    <el-descriptions-item v-for="item in dockOsdItems" :key="item.label" :label="item.label">{{ item.value }}</el-descriptions-item>
+                </el-descriptions>
+                <div v-else style="text-align: center; color: var(--text-muted); padding: 20px;">暂无机场遥测数据</div>
+            </el-card>
+        </div>
+    </div>
+
+    <!-- 连接到第三方平台 弹窗 -->
+    <el-dialog v-model="showMonitorConnectDialog" title="连接到第三方平台" width="460px">
+        <el-form label-width="90px">
+            <el-form-item label="MQTT 地址"><el-input v-model="monitorConn.host" placeholder="127.0.0.1"></el-input></el-form-item>
+            <el-form-item label="端口"><el-input v-model="monitorConn.port" placeholder="1883"></el-input></el-form-item>
+            <el-form-item label="账号"><el-input v-model="monitorConn.username"></el-input></el-form-item>
+            <el-form-item label="密码"><el-input v-model="monitorConn.password" type="password" show-password></el-input></el-form-item>
+        </el-form>
+        <template #footer>
+            <el-button @click="showMonitorConnectDialog = false">取消</el-button>
+            <el-button type="primary" @click="doMonitorConnect" :loading="monitorConnecting">连接</el-button>
+        </template>
+    </el-dialog>
+
+    <!-- 选择设备 弹窗 -->
+    <el-dialog v-model="showDeviceSelectDialog" title="选择设备" width="500px">
+        <el-table :data="monitorDevices" highlight-current-row @current-change="onDeviceSelect" size="small">
+            <el-table-column prop="gatewaySn" label="机场 SN"></el-table-column>
+            <el-table-column prop="droneSn" label="无人机 SN"></el-table-column>
+            <el-table-column label="状态">
+                <template #default="{ row }">
+                    <el-tag :type="row.online ? 'success' : 'info'" size="small">{{ row.online ? '在线' : '离线' }}</el-tag>
+                </template>
+            </el-table-column>
+        </el-table>
+        <template #footer>
+            <el-button @click="showDeviceSelectDialog = false">关闭</el-button>
+        </template>
+    </el-dialog>
+
+    <!-- 飞行控制 弹窗 -->
+    <el-dialog v-model="showFlightControlDialog" title="飞行控制" width="400px">
+        <div class="ctrl-section">
+            <div class="ctrl-section-header">飞行指令</div>
+            <div class="ctrl-grid">
+                <el-button type="success" :disabled="!canTakeoff" @click="sendFlightCmd('takeoff_to_point')">一键起飞</el-button>
+                <el-button type="warning" :disabled="!canReturnHome" @click="sendFlightCmd('return_home')">返航</el-button>
+            </div>
+            <div class="ctrl-full" style="margin-top: 8px;">
+                <el-button :disabled="!canHover" @click="sendFlightCmd('fly_to_point_stop')">悬停</el-button>
+            </div>
+        </div>
+        <div class="ctrl-section">
+            <div class="ctrl-section-header">
+                DRC 远程控制
+                <el-tag :type="drcStateTag" size="small" effect="plain" style="margin-left: 4px; text-transform: none; letter-spacing: 0; font-weight: 500;">{{ drcStateLabel }}</el-tag>
+            </div>
+            <div class="ctrl-grid">
+                <el-button type="success" :disabled="!canEnterDrc" @click="sendFlightCmd('drc_mode_enter')">进入 DRC</el-button>
+                <el-button type="danger" :disabled="!canExitDrc" @click="sendFlightCmd('drc_mode_exit')">退出 DRC</el-button>
+            </div>
+        </div>
+    </el-dialog>
+
+    <!-- 负载控制 弹窗 -->
+    <el-dialog v-model="showPayloadControlDialog" title="负载控制" width="440px">
+        <div class="ctrl-section">
+            <div class="ctrl-section-header">云台控制</div>
+            <div class="ctrl-grid">
+                <el-button :disabled="!droneConnected" @click="sendGimbalReset(0)">回中</el-button>
+                <el-button :disabled="!droneConnected" @click="sendGimbalReset(1)">向下</el-button>
+                <el-button :disabled="!droneConnected" @click="sendGimbalReset(2)">偏航回中</el-button>
+                <el-button :disabled="!droneConnected" @click="sendGimbalReset(3)">俯仰向下</el-button>
+            </div>
+        </div>
+        <div class="ctrl-section">
+            <div class="ctrl-section-header">镜头控制</div>
+            <div class="ctrl-full" style="margin-bottom: 8px;">
+                <el-button type="primary" :disabled="!droneConnected" @click="sendDockCmd('camera_photo_take')">拍照</el-button>
+            </div>
+            <div class="ctrl-grid">
+                <el-button :disabled="!droneConnected" @click="sendDockCmd('camera_recording_start')">开始录像</el-button>
+                <el-button :disabled="!droneConnected" @click="sendDockCmd('camera_recording_stop')">停止录像</el-button>
+            </div>
+        </div>
+        <div class="ctrl-section">
+            <div class="ctrl-section-header">镜头切换</div>
+            <div class="ctrl-grid" v-if="availableLenses.length <= 2">
+                <el-button v-for="lens in availableLenses" :key="lens.type" :disabled="!droneConnected" @click="sendLensChange(lens.type, lens.name)">{{ lens.name }}</el-button>
+            </div>
+            <div class="ctrl-grid-3" v-else>
+                <el-button v-for="lens in availableLenses" :key="lens.type" :disabled="!droneConnected" @click="sendLensChange(lens.type, lens.name)">{{ lens.name }}</el-button>
+            </div>
+        </div>
+        <div class="ctrl-section">
+            <div class="ctrl-section-header">清晰度控制</div>
+            <div class="ctrl-row">
+                <el-select v-model="liveQuality" placeholder="选择清晰度" :disabled="!droneConnected">
+                    <el-option label="自适应" :value="0"></el-option>
+                    <el-option label="流畅" :value="1"></el-option>
+                    <el-option label="标清" :value="2"></el-option>
+                    <el-option label="高清" :value="3"></el-option>
+                    <el-option label="超清" :value="4"></el-option>
+                </el-select>
+                <el-button type="primary" :disabled="!droneConnected" @click="sendLiveQuality">设置</el-button>
+            </div>
+        </div>
+    </el-dialog>
+
+    <!-- 远程调试 弹窗 -->
+    <el-dialog v-model="showDebugDialog" title="远程调试" width="400px">
+        <div class="ctrl-section">
+            <div class="ctrl-section-header">机械控制</div>
+            <div class="ctrl-grid">
+                <el-button @click="sendDockCmd('cover_open')">开舱盖</el-button>
+                <el-button @click="sendDockCmd('cover_close')">关舱盖</el-button>
+                <el-button @click="sendDockCmd('drone_open')">开推杆</el-button>
+                <el-button @click="sendDockCmd('drone_close')">关推杆</el-button>
+            </div>
+        </div>
+        <div class="ctrl-section">
+            <div class="ctrl-section-header">电源管理</div>
+            <div class="ctrl-grid">
+                <el-button @click="sendDockCmd('charge_open')">开充电</el-button>
+                <el-button @click="sendDockCmd('charge_close')">关充电</el-button>
+            </div>
+        </div>
+        <div class="ctrl-section">
+            <div class="ctrl-section-header">系统维护</div>
+            <div class="ctrl-full" style="margin-bottom: 8px;">
+                <el-button type="warning" @click="sendDockCmd('device_reboot')">设备重启</el-button>
+            </div>
+            <div class="ctrl-grid">
+                <el-button type="danger" @click="sendDockCmd('drone_format')">无人机格式化</el-button>
+                <el-button type="danger" @click="sendDockCmd('device_format')">机场格式化</el-button>
+            </div>
+        </div>
+        <div class="ctrl-section">
+            <div class="ctrl-section-header">属性设置</div>
+            <div class="ctrl-full" style="display: flex; align-items: center; gap: 12px;">
+                <span style="font-size: 13px;">静音模式</span>
+                <el-switch v-model="silentMode" :active-value="1" :inactive-value="0" @change="sendSilentMode"></el-switch>
+            </div>
+        </div>
+    </el-dialog>
+
+    <!-- MQTT 消息诊断报告 -->
+    <el-dialog v-model="showDiagnosisDialog" title="MQTT 消息诊断报告" width="720px" :destroy-on-close="false">
+        <div v-if="diagnosisResult">
+            <div class="diag-stats">
+                <div class="diag-stat-item">
+                    <span class="diag-stat-label">总消息</span>
+                    <span class="diag-stat-value">{{ diagnosisResult.stats.total }}</span>
+                </div>
+                <div class="diag-stat-item">
+                    <span class="diag-stat-label">需配对</span>
+                    <span class="diag-stat-value">{{ diagnosisResult.stats.needPair }}</span>
+                </div>
+                <div class="diag-stat-item">
+                    <span class="diag-stat-label">已配对</span>
+                    <span class="diag-stat-value">{{ diagnosisResult.stats.paired }}</span>
+                </div>
+                <div class="diag-stat-item">
+                    <span class="diag-stat-label">异常</span>
+                    <span class="diag-stat-value" :class="{ 'diag-error': diagnosisResult.stats.errors + diagnosisResult.stats.warnings > 0 }">{{ diagnosisResult.stats.errors + diagnosisResult.stats.warnings }}</span>
+                </div>
+            </div>
+
+            <div v-if="diagnosisResult.errors.length > 0">
+                <div class="diag-section-header">异常 ({{ diagnosisResult.errors.length }})</div>
+                <div v-for="(err, idx) in diagnosisResult.errors" :key="idx" class="diag-error-item" :class="err.severity === 'error' ? 'diag-error-bg' : 'diag-warning-bg'">
+                    <div class="diag-error-header">
+                        <span>{{ err.severity === 'error' ? '🔴' : '🟡' }}</span>
+                        <span class="diag-error-type">{{ err.typeLabel }}</span>
+                        <span class="diag-error-topic">{{ err.topicType }}</span>
+                        <span v-if="err.method && err.method !== '-'" style="color:#64748b">/ {{ err.method }}</span>
+                    </div>
+                    <div class="diag-error-detail">{{ err.desc }}</div>
+                    <div class="diag-error-meta"><span v-if="err.code" class="diag-error-code">{{ err.code }}</span> tid: {{ err.tid }} | 时间: {{ err.time }}<span v-if="err.result !== undefined"> | result: {{ err.result }}</span></div>
+                </div>
+            </div>
+
+            <div v-if="diagnosisResult.pairs.length > 0">
+                <div class="diag-section-header" style="cursor:pointer" @click="pairsExpanded = !pairsExpanded">
+                    正常配对 ({{ diagnosisResult.pairs.length }})
+                    <span class="diag-toggle">{{ pairsExpanded ? '▼' : '▶' }}</span>
+                </div>
+                <div v-show="pairsExpanded">
+                    <div v-for="(pair, idx) in diagnosisResult.pairs" :key="idx" class="diag-pair-item">
+                        <span class="diag-pair-topic">{{ pair.requestTopic }} → {{ pair.replyTopic }}</span>
+                        <span v-if="pair.method && pair.method !== '-'" style="color:#64748b">/ {{ pair.method }}</span>
+                        <span class="diag-pair-duration">{{ pair.duration }}ms</span>
+                    </div>
+                </div>
+            </div>
+
+            <div v-if="diagnosisResult.errors.length === 0 && diagnosisResult.pairs.length === 0" class="diag-empty">
+                日志中无需配对的请求-回复消息
+            </div>
+        </div>
+    </el-dialog>
+
+    <!-- 诊断日志弹窗（P/S/M 诊断码记录） -->
+    <el-dialog v-model="showDiagnosticLogsDialog" title="诊断日志（P/S/M 诊断码）" width="720px" @open="loadDiagnosticLogs">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="font-size: 13px; color: #475569;">
+                <el-tag type="danger" size="small">P</el-tag> 平台问题
+                <el-tag type="warning" size="small" style="margin-left: 8px;">S</el-tag> 模拟器问题
+                <el-tag type="info" size="small" style="margin-left: 8px;">M</el-tag> 待验证/监控
+                <span style="margin-left: 12px; color: #64748b;">共 {{ diagnosticLogs.length }} 条</span>
+            </div>
+            <el-button size="small" @click="clearDiagnosticLogs">清空</el-button>
+        </div>
+        <div v-if="diagnosticLogs.length === 0" style="color: #909399; padding: 24px; text-align: center;">暂无诊断日志</div>
+        <div v-for="(log, i) in diagnosticLogs" :key="i" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 10px; margin-bottom: 8px; font-size: 13px;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                <el-tag :type="diagnosticTagType(log.code)" size="small">{{ log.code }}</el-tag>
+                <span style="font-weight: 600; color: #1e293b;">{{ log.description }}</span>
+                <span style="color: #64748b; font-size: 12px;">/ {{ log.method }}</span>
+                <span style="margin-left: auto; color: #94a3b8; font-size: 12px;">{{ log.time }}</span>
+            </div>
+            <div style="color: #475569; line-height: 1.5;">{{ log.detail }}</div>
+        </div>
+    </el-dialog>
+
+    <!-- HMS 告警弹窗 -->
+    <el-dialog v-model="showHmsDialog" title="HMS 健康告警" width="780px" @open="loadHmsAlerts">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="font-size: 13px; color: #475569;">
+                <el-tag type="danger" size="small">L2</el-tag> 警告
+                <el-tag type="warning" size="small" style="margin-left: 8px;">L1</el-tag> 提醒
+                <el-tag type="info" size="small" style="margin-left: 8px;">L0</el-tag> 通知
+                <span style="margin-left: 12px; color: #64748b;">共 {{ hmsTotalCount }} 条告警</span>
+            </div>
+            <el-button size="small" @click="loadHmsAlerts">刷新</el-button>
+        </div>
+        <div v-if="hmsTotalCount === 0" style="color: #909399; padding: 24px; text-align: center;">暂无活跃告警</div>
+        <div v-for="(alerts, sn) in hmsAlerts" :key="sn" style="margin-bottom: 16px;">
+            <div style="font-weight: 600; color: #1e293b; margin-bottom: 8px; font-size: 13px; word-break: break-all;">{{ sn }}</div>
+            <div v-for="(alert, i) in alerts" :key="i" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 10px; margin-bottom: 8px; font-size: 13px;">
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
+                    <el-tag :type="hmsLevelTagType(alert.level)" size="small">L{{ alert.level }}</el-tag>
+                    <span style="font-weight: 600; color: #1e293b;">{{ alert.code }}</span>
+                    <el-tag v-if="alert.imminent === 1" type="warning" size="small">及时性</el-tag>
+                    <span style="color: #64748b; font-size: 12px;">/ {{ alert.device_type }}</span>
+                    <span v-if="alert.in_the_sky === 1" style="margin-left: auto; color: #94a3b8; font-size: 12px;">在空中</span>
+                </div>
+                <div style="color: #475569; font-size: 12px;">module: {{ alert.module }} / args: {{ JSON.stringify(alert.args) }}</div>
+            </div>
+        </div>
+    </el-dialog>
+
+    <!-- 航线任务监控弹窗 -->
+    <el-dialog v-model="showTaskDialog" title="航线任务监控" width="780px" @open="loadTaskProgress">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="font-size: 13px; color: #475569;">
+                <el-tag type="primary" size="small">in_progress</el-tag> 执行中
+                <el-tag type="success" size="small" style="margin-left: 8px;">ok</el-tag> 完成
+                <el-tag type="warning" size="small" style="margin-left: 8px;">paused</el-tag> 暂停
+                <el-tag type="danger" size="small" style="margin-left: 8px;">failed</el-tag> 失败
+                <el-tag type="info" size="small" style="margin-left: 8px;">canceled</el-tag> 取消
+            </div>
+            <el-button size="small" @click="loadTaskProgress">刷新</el-button>
+        </div>
+        <div v-if="Object.keys(taskProgress).length === 0" style="color: #909399; padding: 24px; text-align: center;">暂无任务进度数据</div>
+        <div v-for="(task, sn) in taskProgress" :key="sn" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 12px; margin-bottom: 12px; font-size: 13px;">
+            <div style="font-weight: 600; color: #1e293b; margin-bottom: 8px; word-break: break-all;">{{ sn }}</div>
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 8px; flex-wrap: wrap;">
+                <el-tag :type="taskStatusTagType(task.status)" size="small">{{ task.status }}</el-tag>
+                <span style="color: #475569;">flight_id: {{ task.flight_id || '-' }}</span>
+                <span style="color: #64748b; font-size: 12px;">step: {{ task.current_step }}</span>
+            </div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="color: #64748b; font-size: 12px; min-width: 40px;">{{ task.percent }}%</span>
+                <el-progress :percentage="task.percent" :status="taskProgressStatus(task.status)" :show-text="false" style="flex: 1;"></el-progress>
+            </div>
+        </div>
+    </el-dialog>
+
+    <!-- 直播流监控弹窗 -->
+    <el-dialog v-model="showLiveDialog" title="直播流监控" width="780px" @open="loadLiveStreams">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+            <div style="font-size: 13px; color: #475569;">
+                <span>共 {{ liveStreamCount }} 路推流</span>
+            </div>
+            <el-button size="small" @click="loadLiveStreams">刷新</el-button>
+        </div>
+        <div v-if="liveStreamCount === 0" style="color: #909399; padding: 24px; text-align: center;">暂无活跃推流</div>
+        <div v-for="(streams, sn) in liveStreams" :key="sn" style="margin-bottom: 16px;">
+            <div style="font-weight: 600; color: #1e293b; margin-bottom: 8px; font-size: 13px; word-break: break-all;">{{ sn }}</div>
+            <div v-for="(stream, i) in streams" :key="i" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 10px; margin-bottom: 8px; font-size: 13px;">
+                <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap;">
+                    <span style="font-weight: 600; color: #1e293b;">{{ stream.video_id }}</span>
+                    <el-tag type="primary" size="small">{{ urlTypeLabel(stream.url_type) }}</el-tag>
+                    <el-tag type="success" size="small">{{ stream.video_type }}</el-tag>
+                    <span style="color: #64748b; font-size: 12px;">Q{{ stream.video_quality }}</span>
+                </div>
+                <div style="color: #475569; font-size: 12px; word-break: break-all;">{{ stream.url }}</div>
+            </div>
+        </div>
+    </el-dialog>
+
+    <!-- 指令模板库弹窗 -->
+    <el-dialog v-model="showCmdTemplateDialog" title="指令模板库" width="680px">
+        <div style="margin-bottom: 12px;">
+            <div style="font-size: 13px; color: #475569; margin-bottom: 8px;">选择模板：</div>
+            <el-select v-model="selectedTemplateKey" placeholder="请选择指令模板" style="width: 100%" @change="onTemplateSelected">
+                <el-option-group v-for="group in cmdTemplateGroups" :key="group.label" :label="group.label">
+                    <el-option v-for="tpl in group.items" :key="tpl.key" :label="tpl.label + ' (' + tpl.method + ')'" :value="tpl.key"></el-option>
+                </el-option-group>
+            </el-select>
+        </div>
+        <div style="margin-bottom: 12px;">
+            <div style="font-size: 13px; color: #475569; margin-bottom: 4px;">method：</div>
+            <el-input v-model="cmdTemplateMethod" size="small" readonly></el-input>
+        </div>
+        <div style="margin-bottom: 12px;">
+            <div style="font-size: 13px; color: #475569; margin-bottom: 4px;">data（可编辑）：</div>
+            <el-input v-model="cmdTemplateData" type="textarea" :rows="8" size="small" placeholder='{"key": "value"}'></el-input>
+        </div>
+        <div style="text-align: right;">
+            <el-button size="small" type="primary" @click="sendCmdTemplate" :disabled="!cmdTemplateMethod">下发指令</el-button>
+        </div>
+    </el-dialog>
+
+    <!-- 覆盖率报告 弹窗 -->
+    <el-dialog v-model="showCoverageDialog" title="DJI Cloud API 覆盖率报告" width="560px" @open="loadCoverageHosts">
+        <div style="margin-bottom: 16px;">
+            <div style="font-size: 13px; color: #475569; margin-bottom: 8px;">选择 MQTT 地址（每个第三方平台一份报告）：</div>
+            <el-select v-model="coverageSelectedHost" placeholder="请选择" style="width: 100%" @change="loadCoverageData">
+                <el-option v-for="h in coverageHosts" :key="h" :label="h" :value="h"></el-option>
+            </el-select>
+        </div>
+        <div v-if="coverageData" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 6px; padding: 16px;">
+            <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; text-align: center;">
+                <div>
+                    <div style="font-size: 22px; font-weight: 700; color: #0ea5e9;">{{ coverageData.total_count }}</div>
+                    <div style="font-size: 12px; color: #64748b;">基准总数</div>
+                </div>
+                <div>
+                    <div style="font-size: 22px; font-weight: 700; color: #10b981;">{{ coverageData.covered_count }}</div>
+                    <div style="font-size: 12px; color: #64748b;">已覆盖</div>
+                </div>
+                <div>
+                    <div style="font-size: 22px; font-weight: 700; color: #ef4444;">{{ coverageData.total_count - coverageData.covered_count }}</div>
+                    <div style="font-size: 12px; color: #64748b;">未覆盖</div>
+                </div>
+                <div>
+                    <div style="font-size: 22px; font-weight: 700; color: #f59e0b;">{{ coverageRateText }}</div>
+                    <div style="font-size: 12px; color: #64748b;">覆盖率</div>
+                </div>
+            </div>
+            <div v-if="coverageData.unknown_count > 0" style="margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e2e8f0; font-size: 12px; color: #92400e;">
+                发现 {{ coverageData.unknown_count }} 个非规范 method（不在 DJI 标准内），详见报告
+            </div>
+        </div>
+        <div v-if="coverageSelectedHost && coverageData" style="margin-top: 16px; text-align: right;">
+            <el-button type="primary" size="small" @click="downloadCoverageReport">下载 HTML 报告</el-button>
+        </div>
+        <div v-if="coverageHosts.length === 0" style="text-align: center; padding: 20px; color: #94a3b8;">
+            暂无覆盖率数据（需先连接第三方平台并接收下行指令）
+        </div>
+    </el-dialog>
+
+    <!-- MQTT 消息详情抽屉 -->
+    <el-drawer v-model="showMsgDrawer" title="MQTT 消息详情" direction="rtl" size="560px" :destroy-on-close="true">
+        <template #header>
+            <div class="msg-drawer-header">
+                <span class="msg-drawer-title">MQTT 消息详情</span>
+                <el-button v-if="currentMessage" size="small" text @click="copyPayload">复制 JSON</el-button>
+            </div>
+        </template>
+        <div v-if="currentMessage" class="msg-drawer-body">
+            <el-descriptions :column="1" border size="small" class="msg-meta">
+                <el-descriptions-item label="时间">{{ currentMessage.time }}</el-descriptions-item>
+                <el-descriptions-item label="方向">
+                    <el-tag :type="currentMessage.direction === 'recv' ? 'warning' : 'success'" size="small">
+                        {{ currentMessage.direction === 'recv' ? '收（设备 → 平台）' : '发（平台 → 设备）' }}
+                    </el-tag>
+                </el-descriptions-item>
+                <el-descriptions-item label="Topic">{{ currentMessage.topic }}</el-descriptions-item>
+                <el-descriptions-item label="Method">{{ currentMessage.method || '-' }}</el-descriptions-item>
+            </el-descriptions>
+            <div class="msg-code-wrap">
+                <div v-if="payloadTruncated" class="msg-truncated-tip">
+                    <el-alert type="warning" :closable="false" show-icon title="payload 非合法 JSON，以下为原始文本"></el-alert>
+                </div>
+                <pre class="msg-code" v-html="formattedPayload"></pre>
+            </div>
+        </div>
+    </el-drawer>
+
+</div>
+
+<script src="/vendor/vue/vue.global.prod.js"></script>
+<script src="/vendor/element-plus/index.full.min.js"></script>
+<script>
+const { createApp, ref, reactive, computed, onMounted, onUnmounted, nextTick } = Vue;
+
+createApp({
+    setup() {
+        // 监控器状态
+        const monitorConnected = ref(false);
+        const monitorConnecting = ref(false);
+        const monitorError = ref(false);
+        const monitorDevices = ref([]);
+        const selectedDevice = ref('');
+        const droneOsd = ref({});
+        const dockOsd = ref({});
+        const drcOsd = ref({});
+        const monitorConn = reactive({ host: '', port: '1883', username: '', password: '' });
+        const showMonitorConnectDialog = ref(false);
+        const showDeviceSelectDialog = ref(false);
+        const showFlightControlDialog = ref(false);
+        const showPayloadControlDialog = ref(false);
+        const showDebugDialog = ref(false);
+        const liveQuality = ref(3);
+        const silentMode = ref(0);
+        const showDiagnosisDialog = ref(false);
+        const diagnosisResult = ref(null);
+        const pairsExpanded = ref(false);
+
+        // 覆盖率报告
+        const showCoverageDialog = ref(false);
+        const coverageHosts = ref([]);
+        const coverageSelectedHost = ref('');
+        const coverageData = ref(null);
+
+        // 诊断日志（P/S/M 诊断码记录）
+        const showDiagnosticLogsDialog = ref(false);
+        const diagnosticLogs = ref([]);
+
+        // HMS 告警
+        const showHmsDialog = ref(false);
+        const hmsAlerts = ref({});
+        const hmsTotalCount = ref(0);
+
+        // 航线任务进度
+        const showTaskDialog = ref(false);
+        const taskProgress = ref({});
+
+        // 直播流监控
+        const showLiveDialog = ref(false);
+        const liveStreams = ref({});
+        const liveStreamCount = ref(0);
+
+        // 指令模板库
+        const showCmdTemplateDialog = ref(false);
+        const selectedTemplateKey = ref('');
+        const cmdTemplateMethod = ref('');
+        const cmdTemplateData = ref('');
+        const cmdTemplateGroups = [
+            {
+                label: '机场控制', items: [
+                    { key: 'cover_open', label: '开舱盖', method: 'cover_open', data: '{}' },
+                    { key: 'cover_close', label: '关舱盖', method: 'cover_close', data: '{}' },
+                    { key: 'putter_expand', label: '推杆展开', method: 'putter_expand', data: '{}' },
+                    { key: 'putter_close', label: '推杆收起', method: 'putter_close', data: '{}' },
+                    { key: 'charge_open', label: '开始充电', method: 'charge_open', data: '{}' },
+                    { key: 'charge_close', label: '停止充电', method: 'charge_close', data: '{}' },
+                    { key: 'device_reboot', label: '设备重启', method: 'device_reboot', data: '{}' },
+                ]
+            },
+            {
+                label: '飞行任务', items: [
+                    { key: 'flighttask_prepare', label: '任务准备', method: 'flighttask_prepare', data: '{\n  "flight_id": "",\n  "task_type": 0,\n  "wayline_type": 0,\n  "file": {\n    "url": "",\n    "fingerprint": ""\n  },\n  "rth_altitude": 100,\n  "out_of_control_action": 0,\n  "exit_wayline_when_rc_lost": 0\n}' },
+                    { key: 'flighttask_execute', label: '任务执行', method: 'flighttask_execute', data: '{\n  "flight_id": ""\n}' },
+                    { key: 'flighttask_pause', label: '任务暂停', method: 'flighttask_pause', data: '{}' },
+                    { key: 'flighttask_recovery', label: '任务恢复', method: 'flighttask_recovery', data: '{}' },
+                    { key: 'return_home', label: '返航', method: 'return_home', data: '{}' },
+                ]
+            },
+            {
+                label: '直播控制', items: [
+                    { key: 'live_start_push', label: '开始推流', method: 'live_start_push', data: '{\n  "video_id": "1581F5BMD-0-0",\n  "url": "rtmp://example.com/live/test",\n  "url_type": 1,\n  "video_quality": 0\n}' },
+                    { key: 'live_stop_push', label: '停止推流', method: 'live_stop_push', data: '{\n  "video_id": "1581F5BMD-0-0"\n}' },
+                    { key: 'live_lens_change', label: '切换镜头', method: 'live_lens_change', data: '{\n  "video_id": "1581F5BMD-0-0",\n  "video_type": "normal"\n}' },
+                    { key: 'live_set_quality', label: '设置质量', method: 'live_set_quality', data: '{\n  "video_quality": 0\n}' },
+                ]
+            },
+            {
+                label: '属性设置', items: [
+                    { key: 'silent_mode', label: '静音模式', method: 'property_set', data: '{\n  "silent_mode": 1\n}' },
+                ]
+            },
+        ];
+
+        // 指令通讯窗口
+        const logs = ref([]);
+        const logFilter = ref('all');
+        const autoScroll = ref(true);
+        const searchKeyword = ref('');
+        const expandedLogs = reactive(new Set());
+        const logContainer = ref(null);
+        const showMsgDrawer = ref(false);
+        const currentMessage = ref(null);
+
+        // Topic 过滤（选中的不显示）—— 按 topic 最后一段匹配
+        const topicOptions = [
+            'osd', 'state', 'drc',
+            'services', 'services_reply',
+            'events', 'events_reply',
+            'requests', 'requests_reply',
+            'status', 'status_reply',
+            'property set', 'property set_reply',
+        ];
+        const topicFilter = ref([]);
+
+        let pollTimer = null;
+
+        // 错误码 → 文案映射表（P/S/M 诊断码）
+        const errorCodeMap = {
+            'P-2': '无法链接到第三方平台',
+            'P-3': '第三方平台凭证有误',
+            'P-4': 'MQTT 地址不能为空',
+        };
+
+        // 当前选中的设备对象
+        const currentDevice = computed(() => {
+            return monitorDevices.value.find(d => d.gatewaySn === selectedDevice.value) || null;
+        });
+
+        // 根据无人机型号计算可用镜头（DJI Cloud API live_lens_change video_type）
+        // subtype=1 表示带红外镜头（如 M4TD/M3TD/M30T）
+        const availableLenses = computed(() => {
+            const subType = currentDevice.value?.droneSubType || 0;
+            const lenses = [
+                { type: 'wide', name: '广角' },
+                { type: 'zoom', name: '变焦' }
+            ];
+            if (subType === 1) {
+                lenses.push({ type: 'ir', name: '红外' });
+            }
+            return lenses;
+        });
+
+        // 设备型号名称（DJI Cloud API 设备类型编码）
+        function deviceTypeName(type) {
+            const names = { 1: 'Dock', 2: 'Dock2', 3: 'Dock3' };
+            return names[type] || 'Dock-' + type;
+        }
+        function droneTypeName(type, subType) {
+            // 按 type-subType 映射，参考 DJI 产品支持文档
+            // https://developer.dji.com/doc/cloud-api-tutorial/cn/overview/product-support.html
+            const names = {
+                '60-0': 'M300 RTK',
+                '67-0': 'M30', '67-1': 'M30T',
+                '77-0': 'M3E', '77-1': 'M3T', '77-3': 'M3TA',
+                '89-0': 'M350 RTK',
+                '91-0': 'M3D', '91-1': 'M3TD',
+                '99-0': 'M4E', '99-1': 'M4T',
+                '100-0': 'M4D', '100-1': 'M4TD',
+                '103-0': 'Matrice 400'
+            };
+            const key = type + '-' + (subType || 0);
+            return names[key] || ('Drone-' + type);
+        }
+
+        // ===== DJI Cloud API 状态码映射 =====
+        const droneModeMap = {0:'待机',1:'起飞准备',2:'起飞准备完毕',3:'手动飞行',4:'自动起飞',5:'自动飞行',6:'航线飞行',7:'全景拍照',8:'智能跟随',9:'ADS-B躲避',10:'自动返航',11:'自动降落',12:'强制降落',13:'三桨叶降落',14:'升空',15:'智能降落',16:'特技飞行',17:'智能飞行'};
+        const dockModeMap = {0:'待机',1:'未连接',2:'调试',3:'升级中',4:'连接异常'};
+        const chargeStateMap = {0:'未充电',1:'充电中',2:'充满'};
+        const rtkStateMap = {0:'未定位',1:'GPS定位',2:'RTK固定解'};
+        const netTypeMap = {0:'无网络',1:'4G',2:'5G',3:'以太网'};
+        const drcStateMap = {0:'未连接',1:'连接中',2:'已连接',3:'断开中'};
+
+        // 安全获取嵌套字段值
+        function getPath(obj, path) {
+            if (!obj) return undefined;
+            return path.split('.').reduce((o, k) => (o && o[k] !== undefined) ? o[k] : undefined, obj);
+        }
+        // 格式化数值，undefined/null 显示 '-'
+        function fmt(v, unit) {
+            if (v === undefined || v === null || v === '') return '-';
+            return unit !== undefined ? v + ' ' + unit : String(v);
+        }
+
+        // 无人机 OSD 关键参数
+        const droneOsdItems = computed(() => {
+            const o = droneOsd.value;
+            if (!o || Object.keys(o).length === 0) return [];
+            const bat = getPath(o, 'battery') || {};
+            const pos = getPath(o, 'position_state') || {};
+            return [
+                { label: '飞行模式', value: droneModeMap[o.mode_code] ?? fmt(o.mode_code) },
+                { label: '经度', value: fmt(o.longitude, '°') },
+                { label: '纬度', value: fmt(o.latitude, '°') },
+                { label: '相对高度', value: fmt(o.height, 'm') },
+                { label: '海拔', value: fmt(o.altitude ?? o.elevation, 'm') },
+                { label: '航向角', value: fmt(o.attitude_head, '°') },
+                { label: '俯仰角', value: fmt(o.attitude_pitch, '°') },
+                { label: '横滚角', value: fmt(o.attitude_roll, '°') },
+                { label: '水平速度', value: fmt(o.horizontal_speed, 'm/s') },
+                { label: '垂直速度', value: fmt(o.vertical_speed, 'm/s') },
+                { label: '风速', value: fmt(o.wind_speed, 'm/s') },
+                { label: '风向', value: fmt(o.wind_direction, '°') },
+                { label: '电池电量', value: fmt(bat.capacity_percent, '%') },
+                { label: '电池电压', value: fmt(bat.voltage, 'mV') },
+                { label: '电池温度', value: fmt(bat.temperature, '℃') },
+                { label: '剩余飞行时间', value: fmt(bat.remain_flight_time, 'min') },
+                { label: 'GPS卫星数', value: fmt(pos.gps_number) },
+                { label: 'RTK状态', value: rtkStateMap[pos.is_fixed] ?? fmt(pos.is_fixed) },
+                { label: '控制模式', value: o.control_mode === 1 ? '云端控制' : (o.control_mode === 0 ? '非控制中' : fmt(o.control_mode)) },
+                { label: '飞行时长', value: fmt(o.flight_time, 's') },
+            ];
+        });
+
+        // DRC OSD 关键参数
+        const drcOsdItems = computed(() => {
+            const o = drcOsd.value;
+            // 与 drcState 优先级一致：优先 dockOsd（0.5HZ 定频，始终最新），回退 drcOsd
+            const drcStateVal = dockOsd.value?.drc_state ?? o?.drc_state;
+            if (drcStateVal === undefined) return [];
+            // DRC 未连接时，只显示 DRC 状态，其他字段无意义
+            if (drcStateVal === 0) {
+                return [{ label: 'DRC状态', value: drcStateMap[0] ?? '未连接' }];
+            }
+            const link = o ? (getPath(o, 'link_state') || {}) : {};
+            return [
+                { label: 'DRC状态', value: drcStateMap[drcStateVal] ?? fmt(drcStateVal) },
+                { label: '控制模式', value: fmt(o?.drone_control_mode) },
+                { label: '上行质量', value: fmt(link.up_quality ?? o?.up_quality) },
+                { label: '下行质量', value: fmt(link.down_quality ?? o?.down_quality) },
+                { label: '上行延迟', value: fmt(o?.up_latency, 'ms') },
+                { label: '下行延迟', value: fmt(o?.down_latency, 'ms') },
+            ];
+        });
+
+        // ===== 按钮可用性（根据 OSD 数据自动控制） =====
+        // DRC 状态（优先从 dockOsd 获取，其次从 drcOsd 获取）
+        const drcState = computed(() => dockOsd.value?.drc_state ?? drcOsd.value?.drc_state ?? 0);
+        // 无人机飞行模式
+        const droneModeCode = computed(() => droneOsd.value?.mode_code ?? 0);
+        // 无人机是否在飞行中（非待机/准备/升级/未连接）
+        const isFlying = computed(() => ![0, 1, 2, 13, 14].includes(droneModeCode.value));
+        // 无人机是否已连接（非未连接/升级中）
+        const droneConnected = computed(() => droneModeCode.value !== 14 && droneModeCode.value !== 13);
+        // 飞行控制按钮可用性
+        const canTakeoff = computed(() => droneModeCode.value === 0);
+        const canReturnHome = computed(() => isFlying.value && droneModeCode.value !== 9);
+        const canHover = computed(() => isFlying.value);
+        const canEnterDrc = computed(() => drcState.value !== 2);
+        const canExitDrc = computed(() => drcState.value === 2);
+        // DRC 状态展示（用于飞行控制弹窗 DRC 分区头部标签）
+        const drcStateLabel = computed(() => {
+            const map = {0: '空闲', 1: '连接中', 2: '已连接', 3: '断开中'};
+            return map[drcState.value] ?? '-';
+        });
+        const drcStateTag = computed(() => {
+            const map = {0: 'info', 1: 'warning', 2: 'success', 3: 'danger'};
+            return map[drcState.value] ?? 'info';
+        });
+
+        // 机场 OSD 关键参数
+        const dockOsdItems = computed(() => {
+            const o = dockOsd.value;
+            if (!o || Object.keys(o).length === 0) return [];
+            const bat = getPath(o, 'backup_battery') || {};
+            const net = getPath(o, 'network_state') || {};
+            const stg = getPath(o, 'storage') || {};
+            return [
+                { label: '机场模式', value: dockModeMap[o.mode_code] ?? fmt(o.mode_code) },
+                { label: '舱盖状态', value: o.cover_state === 1 ? '打开' : (o.cover_state === 0 ? '关闭' : fmt(o.cover_state)) },
+                { label: '推杆状态', value: o.putter_state === 1 ? '展开' : (o.putter_state === 0 ? '归位' : fmt(o.putter_state)) },
+                { label: '无人机在舱', value: o.drone_in_dock === 1 ? '在舱' : (o.drone_in_dock === 0 ? '不在舱' : fmt(o.drone_in_dock)) },
+                { label: '充电状态', value: chargeStateMap[o.drone_charge_state] ?? fmt(o.drone_charge_state) },
+                { label: '供电电压', value: fmt(o.electric_supply_voltage, 'V') },
+                { label: '温度', value: fmt(o.temperature, '℃') },
+                { label: '湿度', value: fmt(o.humidity, '%') },
+                { label: '风速', value: fmt(o.wind_speed, 'm/s') },
+                { label: '降雨量', value: fmt(o.rainfall, 'mm') },
+                { label: '经度', value: fmt(o.longitude, '°') },
+                { label: '纬度', value: fmt(o.latitude, '°') },
+                { label: '备用电池', value: fmt(bat.percent, '%') },
+                { label: '网络类型', value: netTypeMap[net.type] ?? fmt(net.type) },
+                { label: '网络质量', value: fmt(net.quality) },
+                { label: '已用存储', value: (stg.used !== undefined && stg.total !== undefined) ? Math.round(stg.used / 1048576) + ' / ' + Math.round(stg.total / 1048576) + ' GB' : '-' },
+            ];
+        });
+
+        async function fetchJSON(url, options) {
+            try {
+                const resp = await fetch(url, options);
+                return await resp.json();
+            } catch (e) {
+                console.error('请求失败:', url, e);
+                return null;
+            }
+        }
+
+        // 监控器连接
+        async function doMonitorConnect() {
+            monitorConnecting.value = true;
+            monitorError.value = false;
+            // 清空旧平台的通讯指令日志，避免不同平台指令混淆
+            await fetchJSON('/api/monitor/logs', { method: 'DELETE' });
+            expandedLogs.clear();
+            showMsgDrawer.value = false;
+            currentMessage.value = null;
+            const body = {
+                // 剥离协议前缀(tcp:// 等,TC-MQTT-010)：与模拟器页面一致，用户可填完整 URI 或纯地址
+                host: String(monitorConn.host || '').trim().replace(/^(tcp|ssl|mqtt):\/\//i, ''),
+                port: parseInt(monitorConn.port) || 1883,
+                username: monitorConn.username,
+                password: monitorConn.password
+            };
+            const data = await fetchJSON('/api/monitor/connect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            monitorConnecting.value = false;
+            if (data && data.success) {
+                monitorConnected.value = true;
+                monitorError.value = false;
+                showMonitorConnectDialog.value = false;
+                ElementPlus.ElMessage.success('监控器已连接');
+            } else {
+                monitorError.value = true;
+                const code = data ? data.code : '0';
+                ElementPlus.ElMessage.error(errorCodeMap[code] || '连接失败');
+            }
+        }
+
+        // 监控器断开
+        async function doMonitorDisconnect() {
+            await fetchJSON('/api/monitor/disconnect', { method: 'POST' });
+            monitorConnected.value = false;
+            monitorError.value = false;
+            selectedDevice.value = '';
+            monitorDevices.value = [];
+            droneOsd.value = {};
+            dockOsd.value = {};
+            drcOsd.value = {};
+            logs.value = [];
+        }
+
+        // 刷新监控器状态
+        async function refreshMonitorStatus() {
+            const data = await fetchJSON('/api/monitor/status');
+            if (data) {
+                monitorConnected.value = data.connected;
+                monitorDevices.value = data.devices || [];
+                if (data.selected_device) {
+                    selectedDevice.value = data.selected_device;
+                } else if (data.connected && monitorDevices.value.length > 0) {
+                    // 未选择设备时自动选择第一个
+                    await onDeviceSelect(monitorDevices.value[0]);
+                }
+            }
+        }
+
+        // 刷新监控器遥测数据（无人机 OSD + 机场 OSD + DRC OSD）
+        async function refreshMonitorOsd() {
+            if (!selectedDevice.value) return;
+            const data = await fetchJSON('/api/monitor/telemetry');
+            if (data) {
+                // DJI Cloud API 消息体为 {bid, data:{...}, timestamp, version}，提取 data 字段
+                droneOsd.value = getPath(data.drone_osd, 'data') || data.drone_osd || {};
+                dockOsd.value = getPath(data.dock_osd, 'data') || data.dock_osd || {};
+                drcOsd.value = getPath(data.drc_osd, 'data') || data.drc_osd || {};
+            }
+        }
+
+        // 刷新监控器日志
+        async function refreshMonitorLogs() {
+            const data = await fetchJSON('/api/monitor/logs');
+            if (data && data.logs) {
+                // 防御：限制 logs 数组最大长度，避免后端配置变更或异常导致前端渲染过多 DOM
+                const sourceLogs = data.logs.length > 500 ? data.logs.slice(-500) : data.logs;
+                logs.value = sourceLogs.map((l, i) => ({ ...l, id: i }));
+                if (autoScroll.value) {
+                    await nextTick();
+                    scrollToBottom();
+                }
+            }
+        }
+
+        // 选择设备
+        async function onDeviceSelect(row) {
+            if (!row) return;
+            await fetchJSON('/api/monitor/select', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sn: row.gatewaySn })
+            });
+            selectedDevice.value = row.gatewaySn;
+            showDeviceSelectDialog.value = false;
+        }
+
+        // 下发飞行指令
+        async function sendFlightCmd(method) {
+            const data = await fetchJSON('/api/monitor/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sn: selectedDevice.value, method: method })
+            });
+            if (data && data.success) {
+                ElementPlus.ElMessage.success('指令已发送: ' + method);
+            } else {
+                ElementPlus.ElMessage.error('指令发送失败');
+            }
+        }
+
+        // 下发机场指令
+        async function sendDockCmd(method) {
+            const data = await fetchJSON('/api/monitor/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ sn: selectedDevice.value, method: method })
+            });
+            if (data && data.success) {
+                ElementPlus.ElMessage.success('指令已发送: ' + method);
+            } else {
+                ElementPlus.ElMessage.error('指令发送失败');
+            }
+        }
+
+        // 云台重置（带 reset_mode 参数）
+        async function sendGimbalReset(resetMode) {
+            const modeNames = { 0: '回中', 1: '向下', 2: '偏航回中', 3: '俯仰向下' };
+            const data = await fetchJSON('/api/monitor/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sn: selectedDevice.value,
+                    method: 'gimbal_reset',
+                    data: { payload_index: '39-0-7', reset_mode: resetMode }
+                })
+            });
+            if (data && data.success) {
+                ElementPlus.ElMessage.success('云台重置: ' + (modeNames[resetMode] || resetMode));
+            } else {
+                ElementPlus.ElMessage.error('云台重置失败');
+            }
+        }
+
+        // 切换直播镜头（live_lens_change）
+        async function sendLensChange(videoType, lensName) {
+            const data = await fetchJSON('/api/monitor/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sn: selectedDevice.value,
+                    method: 'live_lens_change',
+                    data: { video_type: videoType }
+                })
+            });
+            if (data && data.success) {
+                ElementPlus.ElMessage.success('镜头切换: ' + lensName);
+            } else {
+                ElementPlus.ElMessage.error('镜头切换失败');
+            }
+        }
+
+        // 设置直播清晰度
+        async function sendLiveQuality() {
+            const droneSn = currentDevice.value?.droneSn || '';
+            const videoId = droneSn ? `${droneSn}/67-0-7/normal-0` : '';
+            const qualityNames = { 0: '自适应', 1: '流畅', 2: '标清', 3: '高清', 4: '超清' };
+            const data = await fetchJSON('/api/monitor/command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sn: selectedDevice.value,
+                    method: 'live_set_quality',
+                    data: { video_id: videoId, video_quality: liveQuality.value }
+                })
+            });
+            if (data && data.success) {
+                ElementPlus.ElMessage.success('清晰度已设置: ' + (qualityNames[liveQuality.value] || liveQuality.value));
+            } else {
+                ElementPlus.ElMessage.error('清晰度设置失败');
+            }
+        }
+
+        // 下发属性设置（property/set）
+        async function sendSilentMode() {
+            const data = await fetchJSON('/api/monitor/property-set', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sn: selectedDevice.value,
+                    data: { silent_mode: silentMode.value }
+                })
+            });
+            if (data && data.success) {
+                ElementPlus.ElMessage.success('静音模式已设置: ' + (silentMode.value ? '开启' : '关闭'));
+            } else {
+                ElementPlus.ElMessage.error('属性设置失败');
+            }
+        }
+
+        // MQTT 消息诊断：分析请求-回复配对，检测平台异常
+        const PAIR_RULES = {
+            'services': 'services_reply',
+            'property/set': 'property/set_reply',
+            'events': 'events_reply',
+            'requests': 'requests_reply',
+            'status': 'status_reply',
+        };
+        const REQUEST_TOPICS = Object.keys(PAIR_RULES);
+        const REPLY_TOPICS = Object.values(PAIR_RULES);
+
+        function getTopicType(topic) {
+            const prefix = 'thing/product/';
+            const afterPrefix = topic.startsWith(prefix) ? topic.substring(prefix.length) : topic;
+            const slashIdx = afterPrefix.indexOf('/');
+            return afterPrefix.substring(slashIdx + 1);
+        }
+
+        function parseTimeToMs(timeStr) {
+            const parts = timeStr.split(/[:.]/);
+            return parseInt(parts[0]) * 3600000 + parseInt(parts[1]) * 60000 + parseInt(parts[2]) * 1000 + parseInt(parts[3] || 0);
+        }
+
+        // ==================== 覆盖率报告 ====================
+        const coverageRateText = computed(() => {
+            if (!coverageData.value || !coverageData.value.total_count) return '0.0%';
+            return (coverageData.value.covered_count * 100.0 / coverageData.value.total_count).toFixed(1) + '%';
+        });
+
+        async function openCoverageDialog() {
+            showCoverageDialog.value = true;
+            await loadCoverageHosts();
+        }
+
+        async function loadCoverageHosts() {
+            try {
+                const resp = await fetch('/api/coverage/hosts');
+                const data = await resp.json();
+                if (data.success) {
+                    coverageHosts.value = data.hosts || [];
+                    if (data.current_host && !coverageSelectedHost.value) {
+                        coverageSelectedHost.value = data.current_host;
+                    }
+                    if (coverageSelectedHost.value) {
+                        await loadCoverageData();
+                    } else {
+                        coverageData.value = null;
+                    }
+                }
+            } catch (e) {
+                console.error('加载覆盖率地址列表失败:', e);
+            }
+        }
+
+        async function loadCoverageData() {
+            if (!coverageSelectedHost.value) {
+                coverageData.value = null;
+                return;
+            }
+            try {
+                const resp = await fetch('/api/coverage/data?host=' + encodeURIComponent(coverageSelectedHost.value));
+                coverageData.value = await resp.json();
+            } catch (e) {
+                console.error('加载覆盖率数据失败:', e);
+            }
+        }
+
+        function downloadCoverageReport() {
+            if (!coverageSelectedHost.value) return;
+            const url = '/api/coverage/report?host=' + encodeURIComponent(coverageSelectedHost.value);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'coverage-' + coverageSelectedHost.value.replace(/[:.]/g, '_') + '.html';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        function runDiagnosis() {
+            const requestMap = new Map();
+            const replyMap = new Map();
+            let unpairedCount = 0;
+            const pairs = [];
+            const errors = [];
+
+            // 第一遍：协议格式校验 + 分拣请求/回复
+            for (const log of logs.value) {
+                const topicType = getTopicType(log.topic);
+                let payload;
+                try {
+                    payload = JSON.parse(log.payload);
+                } catch (e) {
+                    // P-5：JSON 格式错误
+                    if (REQUEST_TOPICS.includes(topicType) || REPLY_TOPICS.includes(topicType)) {
+                        errors.push({
+                            severity: 'error', type: 'protocol_error', typeLabel: 'JSON格式错误',
+                            code: 'P-5', topicType: topicType, time: log.time,
+                            desc: topicType + ' 消息非合法 JSON: ' + (log.payload || '').substring(0, 50),
+                        });
+                    }
+                    continue;
+                }
+
+                // 仅对需配对的消息校验必填字段和字段类型
+                if (REQUEST_TOPICS.includes(topicType) || REPLY_TOPICS.includes(topicType)) {
+                    // P-6：必填字段校验
+                    const missing = [];
+                    if (!payload.tid) missing.push('tid');
+                    if (!payload.bid) missing.push('bid');
+                    if (!payload.method) missing.push('method');
+                    if (missing.length > 0) {
+                        errors.push({
+                            severity: 'error', type: 'protocol_error', typeLabel: '必填字段缺失',
+                            code: 'P-6', topicType: topicType, time: log.time,
+                            desc: topicType + ' 缺失字段: ' + missing.join(', '),
+                        });
+                        unpairedCount++;
+                        continue;
+                    }
+                    // P-7：字段类型校验（method 必须是字符串）
+                    if (typeof payload.method !== 'string') {
+                        errors.push({
+                            severity: 'error', type: 'protocol_error', typeLabel: '字段类型错误',
+                            code: 'P-7', topicType: topicType, time: log.time,
+                            desc: topicType + ' method 字段类型错误: 期望 string, 实际 ' + typeof payload.method,
+                        });
+                        unpairedCount++;
+                        continue;
+                    }
+                }
+
+                const tid = payload.tid;
+                if (!tid) { unpairedCount++; continue; }
+
+                if (REQUEST_TOPICS.includes(topicType)) {
+                    requestMap.set(tid, { log, topicType, payload });
+                } else if (REPLY_TOPICS.includes(topicType)) {
+                    replyMap.set(tid, { log, topicType, payload });
+                }
+            }
+
+            // 第二遍：配对检查
+            for (const [tid, req] of requestMap) {
+                const reply = replyMap.get(tid);
+                if (!reply) {
+                    errors.push({
+                        severity: 'error', type: 'missing_reply', typeLabel: '缺失回复',
+                        topicType: req.topicType, method: req.payload.method || '-',
+                        tid: tid.substring(0, 8), time: req.log.time,
+                        desc: req.topicType + ' 请求已发送，未收到 ' + PAIR_RULES[req.topicType],
+                    });
+                } else {
+                    const result = (reply.payload.data && reply.payload.data.result !== undefined) ? reply.payload.data.result : (reply.payload.result !== undefined ? reply.payload.result : 0);
+                    if (result !== 0) {
+                        errors.push({
+                            severity: 'error', type: 'reply_error', typeLabel: '回复错误码',
+                            topicType: reply.topicType, method: req.payload.method || reply.payload.method || '-',
+                            tid: tid.substring(0, 8), time: reply.log.time, result: result,
+                            desc: reply.topicType + ' 回复错误码 ' + result,
+                        });
+                    }
+                    pairs.push({
+                        requestTopic: req.topicType, replyTopic: reply.topicType,
+                        method: req.payload.method || '-', tid: tid.substring(0, 8),
+                        duration: parseTimeToMs(reply.log.time) - parseTimeToMs(req.log.time),
+                    });
+                }
+            }
+
+            for (const [tid, reply] of replyMap) {
+                if (!requestMap.has(tid)) {
+                    errors.push({
+                        severity: 'warning', type: 'orphan_reply', typeLabel: '孤儿回复',
+                        topicType: reply.topicType, method: reply.payload.method || '-',
+                        tid: tid.substring(0, 8), time: reply.log.time,
+                        desc: reply.topicType + ' 收到回复但未找到对应请求（可能超出日志窗口）',
+                    });
+                }
+            }
+
+            pairs.sort((a, b) => a.duration - b.duration);
+
+            diagnosisResult.value = {
+                stats: {
+                    total: logs.value.length,
+                    needPair: requestMap.size + replyMap.size,
+                    paired: pairs.length,
+                    unpaired: unpairedCount,
+                    errors: errors.filter(function(e) { return e.severity === 'error'; }).length,
+                    warnings: errors.filter(function(e) { return e.severity === 'warning'; }).length,
+                },
+                errors: errors, pairs: pairs,
+            };
+            pairsExpanded.value = false;
+            showDiagnosisDialog.value = true;
+        }
+
+        function scrollToBottom() {
+            const el = logContainer.value;
+            if (el) el.scrollTop = el.scrollHeight;
+        }
+
+        function openMessageDetail(i) {
+            const log = filteredLogs.value[i];
+            if (!log) return;
+            // 用 _index 记录在 filteredLogs 中的位置，供高亮当前行使用
+            currentMessage.value = { ...log, _index: i };
+            showMsgDrawer.value = true;
+        }
+
+        // 格式化 payload 为带语法高亮的 HTML
+        const formattedPayload = computed(() => {
+            const log = currentMessage.value;
+            if (!log || !log.payload) return '';
+            try {
+                const obj = JSON.parse(log.payload);
+                return highlightJson(JSON.stringify(obj, null, 2));
+            } catch (e) {
+                // 非合法 JSON（如被截断、或非 JSON 文本），转义后原样显示
+                return escapeHtml(log.payload);
+            }
+        });
+
+        // payload 是否为非合法 JSON（用于显示提示）
+        const payloadTruncated = computed(() => {
+            const log = currentMessage.value;
+            if (!log || !log.payload) return false;
+            try {
+                JSON.parse(log.payload);
+                return false;
+            } catch (e) {
+                return true;
+            }
+        });
+
+        // JSON 语法高亮（key / string / number / boolean / null 着不同颜色）
+        function highlightJson(json) {
+            return escapeHtml(json).replace(
+                /("(?:\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(?:true|false)\b|\bnull\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g,
+                (match) => {
+                    let cls = 'json-number';
+                    if (/^"/.test(match)) {
+                        cls = /:\s*$/.test(match) ? 'json-key' : 'json-string';
+                    } else if (/^(true|false)$/.test(match)) {
+                        cls = 'json-boolean';
+                    } else if (match === 'null') {
+                        cls = 'json-null';
+                    }
+                    return '<span class="' + cls + '">' + match + '</span>';
+                }
+            );
+        }
+
+        function escapeHtml(str) {
+            return String(str)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+        }
+
+        async function copyPayload() {
+            const log = currentMessage.value;
+            if (!log || !log.payload) return;
+            // 复制格式化后的 JSON（与代码框显示内容一致），非合法 JSON 则复制原始文本
+            let text = log.payload;
+            try {
+                text = JSON.stringify(JSON.parse(log.payload), null, 2);
+            } catch (e) { /* 非合法 JSON，保持原始文本 */ }
+
+            // 优先使用 Clipboard API，不可用时降级到 execCommand('copy')
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                try {
+                    await navigator.clipboard.writeText(text);
+                    ElementPlus.ElMessage.success('已复制完整 JSON 到剪贴板');
+                    return;
+                } catch (e) { /* 文档未聚焦或权限不足，降级到 execCommand */ }
+            }
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.left = '-9999px';
+            document.body.appendChild(ta);
+            ta.select();
+            try {
+                document.execCommand('copy');
+                ElementPlus.ElMessage.success('已复制完整 JSON 到剪贴板');
+            } catch (e2) {
+                ElementPlus.ElMessage.error('复制失败：' + e2.message);
+            }
+            document.body.removeChild(ta);
+        }
+
+        async function clearLogs() {
+            await fetchJSON('/api/monitor/logs', { method: 'DELETE' });
+            expandedLogs.clear();
+            showMsgDrawer.value = false;
+            currentMessage.value = null;
+            await refreshMonitorLogs();
+        }
+
+        // ==================== 诊断日志 ====================
+        async function loadDiagnosticLogs() {
+            const data = await fetchJSON('/api/monitor/diagnostic-logs');
+            diagnosticLogs.value = data?.logs || [];
+        }
+        async function clearDiagnosticLogs() {
+            await fetchJSON('/api/monitor/diagnostic-logs', { method: 'DELETE' });
+            diagnosticLogs.value = [];
+        }
+        function openDiagnosticLogsDialog() {
+            showDiagnosticLogsDialog.value = true;
+        }
+        function diagnosticTagType(code) {
+            if (code && code.startsWith('P')) return 'danger';
+            if (code && code.startsWith('S')) return 'warning';
+            if (code && code.startsWith('M')) return 'info';
+            return '';
+        }
+
+        // ==================== HMS 告警 ====================
+        async function loadHmsAlerts() {
+            const data = await fetchJSON('/api/monitor/hms-alerts');
+            hmsAlerts.value = data?.data || {};
+            hmsTotalCount.value = data?.total || 0;
+        }
+        function openHmsDialog() {
+            showHmsDialog.value = true;
+        }
+        function hmsLevelTagType(level) {
+            if (level === 2) return 'danger';
+            if (level === 1) return 'warning';
+            return 'info';
+        }
+
+        // ==================== 航线任务监控 ====================
+        async function loadTaskProgress() {
+            const data = await fetchJSON('/api/monitor/task-progress');
+            taskProgress.value = data?.data || {};
+        }
+        function openTaskDialog() {
+            showTaskDialog.value = true;
+        }
+        function taskStatusTagType(status) {
+            if (status === 'ok') return 'success';
+            if (status === 'paused') return 'warning';
+            if (status === 'failed') return 'danger';
+            if (status === 'canceled') return 'info';
+            return 'primary';
+        }
+        function taskProgressStatus(status) {
+            if (status === 'ok') return 'success';
+            if (status === 'failed') return 'exception';
+            if (status === 'paused' || status === 'canceled') return 'warning';
+            return undefined;
+        }
+
+        // ==================== 直播流监控 ====================
+        async function loadLiveStreams() {
+            const data = await fetchJSON('/api/monitor/live-streams');
+            liveStreams.value = data?.data || {};
+            liveStreamCount.value = data?.total || 0;
+        }
+        function openLiveDialog() {
+            showLiveDialog.value = true;
+        }
+        function urlTypeLabel(urlType) {
+            const labels = { 0: 'Unknown', 1: 'RTMP', 2: 'RTSP', 3: 'GB28181', 4: 'WebRTC' };
+            return labels[urlType] || ('Type' + urlType);
+        }
+
+        // ==================== 指令模板库 ====================
+        function openCmdTemplateDialog() {
+            showCmdTemplateDialog.value = true;
+        }
+        function onTemplateSelected(key) {
+            for (const group of cmdTemplateGroups) {
+                const tpl = group.items.find(t => t.key === key);
+                if (tpl) {
+                    cmdTemplateMethod.value = tpl.method;
+                    cmdTemplateData.value = tpl.data;
+                    return;
+                }
+            }
+        }
+        async function sendCmdTemplate() {
+            const sn = selectedDevice.value;
+            if (!sn || !cmdTemplateMethod.value) return;
+            let data;
+            try {
+                data = cmdTemplateData.value.trim() ? JSON.parse(cmdTemplateData.value) : {};
+            } catch (e) {
+                ElementPlus.ElMessage.error('data JSON 格式错误: ' + e.message);
+                return;
+            }
+            const isPropertySet = cmdTemplateMethod.value === 'property_set';
+            const url = isPropertySet ? '/api/monitor/property-set' : '/api/monitor/command';
+            const body = isPropertySet ? { sn, data } : { sn, method: cmdTemplateMethod.value, data };
+            const result = await fetchJSON(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            if (result?.success) {
+                ElementPlus.ElMessage.success('指令已下发: ' + (isPropertySet ? 'property_set' : cmdTemplateMethod.value));
+            } else {
+                ElementPlus.ElMessage.error('下发失败: ' + (result?.message || '未知错误'));
+            }
+        }
+
+        const filteredLogs = computed(() => {
+            const gatewaySn = selectedDevice.value;
+            const droneSn = currentDevice.value?.droneSn;
+            const kw = searchKeyword.value.trim().toLowerCase();
+            return logs.value.filter(l => {
+                const topic = String(l.topic || '');
+                // 只显示选中网关的消息（机场 SN 或无人机 SN）
+                if (gatewaySn && !topic.includes(gatewaySn) && (!droneSn || !topic.includes(droneSn))) return false;
+                if (logFilter.value !== 'all' && l.direction !== logFilter.value) return false;
+                if (topicFilter.value.length > 0) {
+                    if (topicFilter.value.some(f => topic.endsWith('/' + f.replace(' ', '/')))) return false;
+                }
+                // 关键字搜索：匹配 method、topic、payload
+                if (kw) {
+                    const method = String(l.method || '').toLowerCase();
+                    const payload = String(l.payload || '').toLowerCase();
+                    if (!method.includes(kw) && !topic.toLowerCase().includes(kw) && !payload.includes(kw)) return false;
+                }
+                return true;
+            });
+        });
+
+        async function pollAll() {
+            await Promise.all([refreshMonitorStatus(), refreshMonitorOsd(), refreshMonitorLogs()]);
+        }
+
+        // 预填 MQTT 配置：优先从模拟器保存的 localStorage 读取，回退到后端 /api/config
+        async function loadMonitorConfig() {
+            // 1. 尝试从 localStorage 读取模拟器保存的连接配置（含密码）
+            try {
+                const saved = localStorage.getItem('simulator_connConfig');
+                if (saved) {
+                    const cfg = JSON.parse(saved);
+                    if (cfg.mqtt_address) {
+                        // 剥离协议前缀(tcp:// 等)：与模拟器页面一致，存储值可能带前缀
+                        const addr = String(cfg.mqtt_address).trim().replace(/^(tcp|ssl|mqtt):\/\//i, '');
+                        const idx = addr.lastIndexOf(':');
+                        if (idx > 0) {
+                            monitorConn.host = addr.substring(0, idx).trim();
+                            monitorConn.port = addr.substring(idx + 1).trim();
+                        } else if (addr) {
+                            monitorConn.host = addr;
+                        }
+                    }
+                    if (cfg.mqtt_username) monitorConn.username = cfg.mqtt_username;
+                    if (cfg.mqtt_password) monitorConn.password = cfg.mqtt_password;
+                }
+            } catch (e) {}
+
+            // 2. localStorage 没有的字段，从后端 mqtt 公共配置补充（密码脱敏不回传）
+            const data = await fetchJSON('/api/monitor/default-config');
+            if (data) {
+                if (!monitorConn.host && data.host) monitorConn.host = data.host;
+                if (!monitorConn.port || monitorConn.port === '1883') {
+                    if (data.port) monitorConn.port = String(data.port);
+                }
+                if (!monitorConn.username && data.username) monitorConn.username = data.username;
+            }
+        }
+
+        onMounted(() => {
+            loadMonitorConfig();
+            pollAll();
+            pollTimer = setInterval(pollAll, 2000);
+        });
+
+        onUnmounted(() => {
+            if (pollTimer) clearInterval(pollTimer);
+        });
+
+        return {
+            monitorConnected, monitorConnecting, monitorError, monitorDevices, selectedDevice,
+            monitorConn, showMonitorConnectDialog, showDeviceSelectDialog,
+            droneOsd, dockOsd, drcOsd,
+            droneOsdItems, drcOsdItems, dockOsdItems,
+            showFlightControlDialog, showPayloadControlDialog, showDebugDialog,
+            liveQuality, sendLiveQuality, sendGimbalReset, sendLensChange, availableLenses,
+            canTakeoff, canReturnHome, canHover, canEnterDrc, canExitDrc, droneConnected,
+            drcStateLabel, drcStateTag,
+            currentDevice, deviceTypeName, droneTypeName,
+            doMonitorConnect, doMonitorDisconnect, onDeviceSelect,
+            sendFlightCmd, sendDockCmd, sendSilentMode, silentMode,
+            runDiagnosis, showDiagnosisDialog, diagnosisResult, pairsExpanded,
+            logs, logFilter, autoScroll, searchKeyword, expandedLogs, logContainer,
+            topicFilter, topicOptions, filteredLogs,
+            showMsgDrawer, currentMessage, formattedPayload, payloadTruncated,
+            openMessageDetail, copyPayload, clearLogs,
+            showCoverageDialog, coverageHosts, coverageSelectedHost, coverageData, coverageRateText,
+            showDiagnosticLogsDialog, diagnosticLogs, loadDiagnosticLogs, clearDiagnosticLogs, openDiagnosticLogsDialog, diagnosticTagType,
+            showHmsDialog, hmsAlerts, hmsTotalCount, loadHmsAlerts, openHmsDialog, hmsLevelTagType,
+            showTaskDialog, taskProgress, loadTaskProgress, openTaskDialog, taskStatusTagType, taskProgressStatus,
+            showLiveDialog, liveStreams, liveStreamCount, loadLiveStreams, openLiveDialog, urlTypeLabel,
+            showCmdTemplateDialog, selectedTemplateKey, cmdTemplateMethod, cmdTemplateData, cmdTemplateGroups,
+            openCmdTemplateDialog, onTemplateSelected, sendCmdTemplate,
+            openCoverageDialog, loadCoverageHosts, loadCoverageData, downloadCoverageReport,
+        };
+    }
+}).use(ElementPlus).mount('#app');
+// Vue 挂载完成，移除加载占位
+document.getElementById('app-loading')?.remove();
+</script>
+</body>
+</html>

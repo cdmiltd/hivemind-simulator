@@ -1,0 +1,199 @@
+# ========================================
+# DJI Dock 模拟器 多实例编排
+# ========================================
+# 用途:同时模拟多个机场和飞行器,每个实例 = 一台机场 + 一台飞行器
+#
+# 前置条件:
+#   1. SN 配置已开放(环境变量 SIMULATOR_DOCK_SN / SIMULATOR_DRONE_SN)
+#      未配置时回退到设备型号默认 SN(dockType.defaultSn())
+#   2. 镜像已构建:docker compose -f docker-compose.yml build simulator
+#      (本文件复用同一镜像,不重复构建)
+#
+# 启动:
+#   docker compose -f docker-compose-multi.yml up -d
+#
+# 访问:
+#   模拟器1: http://localhost:9090  (DOCK3_001 / M4TD_001)
+#   模拟器2: http://localhost:9091  (DOCK3_002 / M4TD_002)
+#   模拟器3: http://localhost:9092  (DOCK3_003 / M4TD_003)
+#
+# 端口分配:
+#   每个实例容器内统一 9090,宿主机映射不同端口(9090/9091/9092)
+#   MQTT 共用 broker,通过不同 SN 区分 topic,无端口冲突
+#
+# Volume 分配:
+#   config: 每个实例独立(配置不同 SN、机场位置等)
+#   media/videos: 共享同一份素材(所有实例可复用相同的照片/视频文件)
+#
+# 扩展实例:
+#   复制 simulator-1 配置,修改端口/SN/volume 名称即可
+# ========================================
+
+services:
+  # 可选:本地调试用 MQTT Broker(对接第三方平台时无需启用)
+  emqx:
+    profiles: ["local-mqtt"]
+    image: emqx/emqx:5.6
+    container_name: emqx
+    ports:
+      - "1883:1883"
+      - "8083:8083"
+      - "8883:8883"
+      - "18083:18083"
+    environment:
+      EMQX_NAME: emqx
+      EMQX_HOST: 127.0.0.1
+      EMQX_DASHBOARD__DEFAULT_USERNAME: admin
+      EMQX_DASHBOARD__DEFAULT_PASSWORD: public
+    volumes:
+      - emqx-data:/opt/emqx/data
+      - emqx-log:/opt/emqx/log
+    networks:
+      - simulator-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/opt/emqx/bin/emqx", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # ========================================
+  # 模拟器实例 1
+  # ========================================
+  simulator-1:
+    image: dock-simulator-simulator
+    container_name: dji-dock-simulator-1
+    ports:
+      - "9090:9090"
+    environment:
+      MQTT_HOST: uas-emqx
+      MQTT_PORT: 1883
+      MQTT_USERNAME: dji_uas_admin
+      MQTT_PASSWORD: Dji@Mqtt2024!Secure
+      SERVER_PORT: 9090
+      LOGGING_LEVEL_LTD_CDMI_HIVEMIND_SIMULATOR: DEBUG
+      SIMULATOR_CONFIG_DIR: /app/config
+      # 设备型号(可选,默认 DOCK3/M4TD)
+      SIMULATOR_DOCK_TYPE: DOCK3
+      SIMULATOR_DRONE_TYPE: M4TD
+      # 设备 SN(每个实例必须不同)
+      SIMULATOR_DOCK_SN: DOCK3_001
+      SIMULATOR_DRONE_SN: M4TD_001
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - simulator-net
+      - platform-net
+    volumes:
+      - simulator-config-1:/app/config
+      - simulator-media:/app/media
+      - simulator-videos:/app/videos
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # ========================================
+  # 模拟器实例 2
+  # ========================================
+  simulator-2:
+    image: dock-simulator-simulator
+    container_name: dji-dock-simulator-2
+    ports:
+      - "9091:9090"
+    environment:
+      MQTT_HOST: uas-emqx
+      MQTT_PORT: 1883
+      MQTT_USERNAME: dji_uas_admin
+      MQTT_PASSWORD: Dji@Mqtt2024!Secure
+      SERVER_PORT: 9090
+      LOGGING_LEVEL_LTD_CDMI_HIVEMIND_SIMULATOR: DEBUG
+      SIMULATOR_CONFIG_DIR: /app/config
+      SIMULATOR_DOCK_TYPE: DOCK3
+      SIMULATOR_DRONE_TYPE: M4TD
+      SIMULATOR_DOCK_SN: DOCK3_002
+      SIMULATOR_DRONE_SN: M4TD_002
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - simulator-net
+      - platform-net
+    volumes:
+      - simulator-config-2:/app/config
+      - simulator-media:/app/media
+      - simulator-videos:/app/videos
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # ========================================
+  # 模拟器实例 3
+  # ========================================
+  simulator-3:
+    image: dock-simulator-simulator
+    container_name: dji-dock-simulator-3
+    ports:
+      - "9092:9090"
+    environment:
+      MQTT_HOST: uas-emqx
+      MQTT_PORT: 1883
+      MQTT_USERNAME: dji_uas_admin
+      MQTT_PASSWORD: Dji@Mqtt2024!Secure
+      SERVER_PORT: 9090
+      LOGGING_LEVEL_LTD_CDMI_HIVEMIND_SIMULATOR: DEBUG
+      SIMULATOR_CONFIG_DIR: /app/config
+      SIMULATOR_DOCK_TYPE: DOCK3
+      SIMULATOR_DRONE_TYPE: M4TD
+      SIMULATOR_DOCK_SN: DOCK3_003
+      SIMULATOR_DRONE_SN: M4TD_003
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - simulator-net
+      - platform-net
+    volumes:
+      - simulator-config-3:/app/config
+      - simulator-media:/app/media
+      - simulator-videos:/app/videos
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+volumes:
+  # EMQX 数据与日志卷(仅 local-mqtt profile 使用)
+  emqx-data:
+  emqx-log:
+  # 模拟器配置卷:每个实例独立(配置不同 SN、机场位置等)
+  simulator-config-1:
+    name: dji-dock-simulator-config-1
+  simulator-config-2:
+    name: dji-dock-simulator-config-2
+  simulator-config-3:
+    name: dji-dock-simulator-config-3
+  # 媒体/视频卷:所有实例共享同一份素材(复用相同的照片/视频文件)
+  simulator-media:
+    name: dji-dock-simulator-media
+  simulator-videos:
+    name: dji-dock-simulator-videos
+
+networks:
+  simulator-net:
+    driver: bridge
+  # 同机 Docker 部署的第三方平台容器网络(external:须已存在)
+  # 对接 hivemind:接入 uas-network,通过容器名 uas-emqx:1883 直连 EMQX
+  platform-net:
+    external: true
+    name: uas-network
