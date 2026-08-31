@@ -1,0 +1,3 @@
+﻿STATUS: Up 10 seconds (healthy)
+HEALTH: {"status":"UP","app":"dji-dock-simulator","version":"1.3.2","mqtt_connected":false,"device_online":false,"device_mode":"DOCK","ts":1787318671867}
+DRONE: {"latitude":30.578691,"longitude":104.208787,"height":0.0,"elevation":521.0,"mode_code":0,"in_dock":true,"activated":false,"rc_lost_action":0}
