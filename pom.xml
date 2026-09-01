@@ -28,7 +28,7 @@
     <properties>
         <java.version>21</java.version>
         <paho.version>1.2.5</paho.version>
-        <aws.sdk.version>2.25.30</aws.sdk.version>
+        <aws.sdk.version>2.54.7</aws.sdk.version>
     </properties>
 
     <dependencies>
