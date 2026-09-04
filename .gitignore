@@ -1,0 +1,13 @@
+target/
+*.class
+*.jar
+!.mvn/wrapper/maven-wrapper.jar
+!lib/*.jar
+.idea/
+*.iml
+.vscode/
+.DS_Store
+*.log
+.trae-html-share-packages/
+.tools/
+*.pid
