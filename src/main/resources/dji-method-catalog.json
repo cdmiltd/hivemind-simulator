@@ -1,0 +1,125 @@
+{
+  "_comment": "DJI Cloud API 平台→设备下行指令全集（覆盖率基准）。真相源：DJI Cloud API 官方文档 https://developer.dji.com/doc/cloud-api-tutorial/cn/api-reference/dock-to-cloud/mqtt-dock.html。按通道分类，每类按 Dock 适用范围细分：common=三 Dock 共有，dock1/dock2/dock3=该 Dock 独有。",
+  "services": {
+    "common": [
+      "flighttask_prepare",
+      "flighttask_execute",
+      "flighttask_pause",
+      "flighttask_recovery",
+      "flighttask_undo",
+      "return_home",
+      "return_home_cancel",
+      "live_start_push",
+      "live_stop_push",
+      "live_set_quality",
+      "live_camera_change",
+      "live_lens_change",
+      "upload_flighttask_media_prioritize",
+      "drc_mode_enter",
+      "drc_mode_exit",
+      "fly_to_point",
+      "fly_to_point_stop",
+      "fly_to_point_update",
+      "takeoff_to_point",
+      "flight_authority_grab",
+      "payload_authority_grab",
+      "camera_frame_zoom",
+      "camera_mode_switch",
+      "camera_photo_take",
+      "camera_photo_stop",
+      "camera_recording_start",
+      "camera_recording_stop",
+      "camera_screen_drag",
+      "camera_aim",
+      "camera_focal_length_set",
+      "gimbal_reset",
+      "camera_look_at",
+      "camera_screen_split",
+      "photo_storage_set",
+      "video_storage_set",
+      "camera_exposure_mode_set",
+      "camera_exposure_set",
+      "camera_focus_mode_set",
+      "camera_focus_value_set",
+      "camera_point_focus_action",
+      "ir_metering_mode_set",
+      "ir_metering_point_set",
+      "ir_metering_area_set",
+      "cover_open",
+      "cover_close",
+      "cover_force_close",
+      "drone_open",
+      "drone_close",
+      "charge_open",
+      "charge_close",
+      "device_reboot",
+      "device_format",
+      "drone_format",
+      "debug_mode_open",
+      "debug_mode_close",
+      "supplement_light_open",
+      "supplement_light_close",
+      "battery_maintenance_switch",
+      "battery_store_mode_switch",
+      "alarm_state_switch",
+      "air_conditioner_mode_switch",
+      "sdr_workmode_switch"
+    ],
+    "dock1": [
+      "flight_setup_abort",
+      "putter_open",
+      "putter_close"
+    ],
+    "dock2": [
+      "flighttask_stop",
+      "return_specific_home",
+      "esim_activate",
+      "esim_operator_switch",
+      "sim_slot_switch"
+    ],
+    "dock3": [
+      "flighttask_stop",
+      "return_specific_home",
+      "esim_activate",
+      "esim_operator_switch",
+      "sim_slot_switch",
+      "rtk_calibration"
+    ]
+  },
+  "drc_down": {
+    "common": [
+      "drone_emergency_stop",
+      "stick_control",
+      "drone_control",
+      "heart_beat"
+    ],
+    "dock1": [],
+    "dock2": [
+      "drc_force_landing",
+      "drc_emergency_landing"
+    ],
+    "dock3": [
+      "drc_camera_night_mode_set",
+      "drc_camera_denoise_level_set",
+      "drc_camera_night_vision_enable",
+      "drc_infrared_fill_light_enable",
+      "drc_light_brightness_set",
+      "drc_light_mode_set",
+      "drc_light_fine_tuning_set",
+      "drc_light_calibration",
+      "drc_speaker_play_mode_set",
+      "drc_speaker_tts_set",
+      "drc_speaker_play_volume_set",
+      "drc_speaker_play_stop",
+      "drc_speaker_replay"
+    ]
+  },
+  "property_set": {
+    "common": [
+      "property_set"
+    ],
+    "dock1": [],
+    "dock2": [],
+    "dock3": []
+  }
+}

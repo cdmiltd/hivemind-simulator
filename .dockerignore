@@ -1,0 +1,37 @@
+# 版本控制
+.git
+.gitignore
+
+# IDE 配置
+.idea
+.vscode
+*.iml
+
+# 文档
+*.md
+docs/
+
+# 脚本
+scripts/
+
+# Maven 包装器（容器内不需要）
+.mvn
+mvnw
+mvnw.cmd
+
+# 构建中间产物（只保留 jar）
+target/classes
+target/test-classes
+target/generated-sources
+target/generated-test-sources
+target/maven-archiver
+target/maven-status
+target/site
+target/surefire-reports
+target/jacoco.exec
+
+# 运行时文件
+*.log
+*.tmp
+media/
+videos/

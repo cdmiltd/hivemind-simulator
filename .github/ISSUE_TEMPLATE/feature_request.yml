@@ -1,0 +1,35 @@
+name: 功能建议
+description: 提出一个功能建议
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 解决的问题
+      description: 这个功能解决什么问题
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: 期望的方案
+      description: 你希望怎么实现
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 备选方案
+      description: 考虑过的其他方案
+  - type: dropdown
+    id: device
+    attributes:
+      label: 涉及设备类型
+      options:
+        - Dock1
+        - Dock2
+        - Dock3
+        - 不适用
+    validations:
+      required: true

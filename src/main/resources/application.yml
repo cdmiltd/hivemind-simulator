@@ -1,0 +1,120 @@
+# ========================================
+# DJI Dock 模拟器/监控器配置
+# ========================================
+# 应用版本（Maven 资源过滤注入 project.version，OpenAPI 文档元数据使用）
+application:
+  version: @project.version@
+
+# springdoc-openapi 接口文档（TDD-SPEC TC-API-DOC-001~003）
+# Swagger UI: /swagger-ui.html    OpenAPI JSON: /v3/api-docs
+springdoc:
+  api-docs:
+    enabled: true
+  swagger-ui:
+    enabled: true
+    # 按需可关闭文档（如生产环境）：springdoc.api-docs.enabled=false + springdoc.swagger-ui.enabled=false
+
+# MQTT 公共配置（模拟器与监控器共享连接参数，各自独立的 clientId 前缀）
+# 凭据需与 hivemind application.yml 的 mqtt.username/password 一致
+mqtt:
+  host: 127.0.0.1
+  port: 1883
+  username: your-mqtt-username
+  password: your-mqtt-password
+  simulator-client-id-prefix: dock-sim-
+  monitor-client-id-prefix: monitor-
+
+simulator:
+  # SN 生成模式（设计文档 §7.1，TDD-SPEC TC-REG-028~031）
+  # unique-enabled: false（缺省）SN 取设备型号 defaultSn()，单实例调试用
+  # unique-enabled: true 生成并持久化实例唯一 SN（defaultSn 前缀 + 随机后缀），
+  #   多实例部署（docker-compose-multi）时避免共用 broker 的 SN 冲突；
+  #   型号与 SN 成对持久化到 live-config.json，重启后设备身份不变
+  sn:
+    unique-enabled: false
+  # 机场默认位置（默认成都，与 hivemind 默认地图中心一致）
+  location:
+    latitude: 30.670815
+    longitude: 104.071523
+    height: 500.0
+  # 指令通讯窗口日志配置
+  log:
+    max-size: 2000
+  # 直播推流配置
+  # real-push-enabled: true 启用真实推流（需本机 ffmpeg 支持 WHIP，即 --enable-muxer=whip 编译）
+  # ffmpeg-path: ffmpeg 可执行文件路径，默认 "ffmpeg" 从 PATH 查找
+  # video-dir: 视频文件目录，按 {camera_index}-{video_type}.mp4 命名查找（如 165-0-7-normal.mp4）
+  # 支持 RTMP (url_type=1) 和 WebRTC (url_type=4) 真实推流，Agora (url_type=0)/GB28181 (url_type=3) 降级为协议模拟
+  live:
+    real-push-enabled: false
+    ffmpeg-path: ffmpeg
+    video-dir: ""
+    # 直播方式（JSBridge live 模块 video-publish-type）：
+    # video-on-demand/video-by-manual/video-demand-aux-manual
+    video-publish-type: "video-on-demand"
+  # 媒体上传配置
+  # media-dir: 模拟照片/视频文件目录，媒体上传时从该目录读取文件上传到对象存储。留空则跳过文件上传
+  # auto-upload-photo: 是否自动上传照片
+  # auto-upload-photo-type: 自动上传照片类型 0=原图 1=缩略图
+  # auto-upload-video: 是否自动上传视频
+  # download-owner: 后台自动下载的遥控器 0=本控 1=其他控
+  media:
+    media-dir: ""
+    auto-upload-photo: false
+    auto-upload-photo-type: 0
+    auto-upload-video: false
+    download-owner: 0
+  # hivemind 云平台 HTTP/WebSocket 接口配置（Pilot 上云专用）
+  # base-url: hivemind HTTP API 基础地址（后续看能否通过 JSBridge 注册获得）
+  # timeout: HTTP 请求超时（毫秒）
+  # token: hivemind 访问令牌（x-auth-token），留空则使用空串
+  # ws-url: hivemind WebSocket 地址（接收地图元素推送、态势感知推送）
+  # ws-token: WebSocket 连接 token（URL 中需 URLEncode）
+  hivemind:
+    http:
+      base-url: ""
+      timeout: 5000
+      token: ""
+    websocket:
+      url: ""
+      token: ""
+  # MOP（Mission Open Platform）数据传输配置（JSBridge mop 模块参数化）
+  # host: MOP WebSocket 地址，留空则跳过连接
+  # token: MOP 平台 token（x-auth-token，URL 中需 URLEncode），留空则使用空串
+  mop:
+    host: ""
+    token: ""
+  # Pilot 上云地图模块配置（JSBridge map 模块参数化）
+  # user-name: 地图元素归属用户名（element.user_name）
+  # element-pre-name: 地图元素名称前缀，便于在多端共享时区分来源
+  map:
+    user-name: ""
+    element-pre-name: ""
+  # 物模型版本配置（update_topo 中 thing_version 字段）
+  # DJI 设备的物模型版本号，不同于固件版本。不同设备型号/固件版本对应不同版本。
+  # 默认值 1.2.3 为 DJI Dock3 最新物模型版本，可根据实际模拟设备调整
+  thing:
+    thing-version: "1.2.3"
+
+# ========================================
+# Web 控制台端口
+# ========================================
+server:
+  port: 9090
+
+# 禁用静态资源缓存，确保修改 index.html 后刷新即生效
+# multipart 上限：供 Web UI 上传直播推流视频文件（Docker 部署场景，替代 docker cp）
+spring:
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          no-cache: true
+  servlet:
+    multipart:
+      max-file-size: 512MB
+      max-request-size: 512MB
+
+logging:
+  level:
+    ltd.cdmi.hivemind.simulator: DEBUG
